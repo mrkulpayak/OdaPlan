@@ -1,0 +1,8 @@
+export const CM_TO_PX = 4;
+export const SNAP_DISTANCE_CM = 5;
+export const ORTHOGONAL_SNAP_ANGLE_THRESHOLD = 5;
+export const DEFAULT_DOOR_WIDTH_CM = 90;
+export const DEFAULT_WINDOW_WIDTH_CM = 120;
+export const MIN_ROOM_DIMENSION_CM = 50;
+export const MAX_ROOM_DIMENSION_CM = 9999;
+export const CANVAS_PADDING_PERCENT = 0.10;

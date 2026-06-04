@@ -1,0 +1,140 @@
+import { SNAP_DISTANCE_CM } from '../lib/constants';
+import { distancePointToSegment, segmentAngleDegrees } from '../lib/geometry';
+import type { Room, FurnitureInstance, FurnitureCatalogItem, FurnitureFrontSide } from '../types';
+
+export interface SnapResult {
+  position: { x: number; y: number };
+  rotation: number;
+  snappedTo?: { wallId: string; side: FurnitureFrontSide };
+  guideLines: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+}
+
+function furnitureCorners(pos: { x: number; y: number }, w: number, d: number) {
+  return [
+    { x: pos.x, y: pos.y },
+    { x: pos.x + w, y: pos.y },
+    { x: pos.x + w, y: pos.y + d },
+    { x: pos.x, y: pos.y + d },
+  ];
+}
+
+function furnitureSideMidpoints(pos: { x: number; y: number }, w: number, d: number) {
+  return {
+    top: { x: pos.x + w / 2, y: pos.y },
+    right: { x: pos.x + w, y: pos.y + d / 2 },
+    bottom: { x: pos.x + w / 2, y: pos.y + d },
+    left: { x: pos.x, y: pos.y + d / 2 },
+  };
+}
+
+export function computeSnap(
+  pos: { x: number; y: number },
+  item: FurnitureCatalogItem,
+  room: Room | null,
+  otherInstances: FurnitureInstance[],
+  otherItems: Map<string, FurnitureCatalogItem>
+): SnapResult {
+  if (!room) return { position: pos, rotation: 0, guideLines: [] };
+
+  const w = item.widthCm;
+  const d = item.depthCm;
+
+  let bestDist = SNAP_DISTANCE_CM + 1;
+  let bestResult: SnapResult | null = null;
+
+  // --- Wall snap (Priority 1) ---
+  const mids = furnitureSideMidpoints(pos, w, d);
+  const sideEntries = Object.entries(mids) as Array<[FurnitureFrontSide, { x: number; y: number }]>;
+
+  for (const wall of room.walls) {
+    const a = room.points[wall.startPointIndex];
+    const b = room.points[wall.endPointIndex];
+    const wallAngleDeg = segmentAngleDegrees(a, b);
+    const isAxisAligned = Math.abs(wallAngleDeg % 90) < 5 || Math.abs(wallAngleDeg % 90) > 85;
+
+    for (const [side, midpoint] of sideEntries) {
+      const dist = distancePointToSegment(midpoint, a, b);
+      if (dist >= bestDist) continue;
+
+      let snappedPos = { ...pos };
+      let snappedRotation = 0;
+
+      if (isAxisAligned) {
+        const wallIsHoriz = Math.abs(wallAngleDeg % 180) < 5 || Math.abs(wallAngleDeg % 180) > 175;
+        if (wallIsHoriz) {
+          const wallY = a.y;
+          if (side === 'top') snappedPos = { x: pos.x, y: wallY };
+          else if (side === 'bottom') snappedPos = { x: pos.x, y: wallY - d };
+          else continue; // left/right sides against horizontal wall — not natural
+        } else {
+          const wallX = a.x;
+          if (side === 'left') snappedPos = { x: wallX, y: pos.y };
+          else if (side === 'right') snappedPos = { x: wallX - w, y: pos.y };
+          else continue;
+        }
+        snappedRotation = 0;
+      } else {
+        // Angled wall — rotate furniture to align with wall
+        // snap bottom side of furniture to wall by default
+        snappedRotation = wallAngleDeg;
+        snappedPos = pos; // position stays (simplified; full math would project onto wall)
+      }
+
+      bestDist = dist;
+      bestResult = {
+        position: snappedPos,
+        rotation: snappedRotation,
+        snappedTo: { wallId: wall.id, side },
+        guideLines: [{ x1: a.x, y1: a.y, x2: b.x, y2: b.y }],
+      };
+    }
+  }
+
+  if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
+
+  // --- Corner snap (Priority 2) ---
+  const corners = furnitureCorners(pos, w, d);
+  for (const corner of room.points) {
+    for (const fc of corners) {
+      const dist = Math.hypot(fc.x - corner.x, fc.y - corner.y);
+      if (dist < SNAP_DISTANCE_CM && dist < bestDist) {
+        bestDist = dist;
+        bestResult = {
+          position: { x: pos.x + (corner.x - fc.x), y: pos.y + (corner.y - fc.y) },
+          rotation: 0,
+          guideLines: [],
+        };
+      }
+    }
+  }
+
+  if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
+
+  // --- Furniture-to-furniture snap (Priority 3) ---
+  for (const other of otherInstances) {
+    const otherItem = otherItems.get(other.catalogItemId);
+    if (!otherItem) continue;
+    const ow = otherItem.widthCm;
+    const od = otherItem.depthCm;
+    const op = other.position;
+
+    const checks: Array<[number, number, number, number, { x: number; y: number }]> = [
+      [pos.x + w, pos.y + d / 2, op.x, op.y + od / 2, { x: op.x - w, y: pos.y }],
+      [pos.x, pos.y + d / 2, op.x + ow, op.y + od / 2, { x: op.x + ow, y: pos.y }],
+      [pos.x + w / 2, pos.y + d, op.x + ow / 2, op.y, { x: pos.x, y: op.y - d }],
+      [pos.x + w / 2, pos.y, op.x + ow / 2, op.y + od, { x: pos.x, y: op.y + od }],
+    ];
+
+    for (const [mx, my, ox, oy, snappedPos] of checks) {
+      const dist = Math.hypot(mx - ox, my - oy);
+      if (dist < SNAP_DISTANCE_CM && dist < bestDist) {
+        bestDist = dist;
+        bestResult = { position: snappedPos, rotation: 0, guideLines: [] };
+      }
+    }
+  }
+
+  if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
+
+  return { position: pos, rotation: 0, guideLines: [] };
+}

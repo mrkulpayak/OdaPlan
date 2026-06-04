@@ -1,0 +1,82 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: #2C5F8A;
+  --color-primary-hover: #214A6D;
+  --color-secondary: #6B7A8D;
+  --color-accent: #E8A020;
+  --color-background: #F5F6F7;
+  --color-surface: #FFFFFF;
+  --color-surface-alt: #ECEEF0;
+  --color-text: #1A2332;
+  --color-text-muted: #6B7A8D;
+  --color-border: #D4D8DE;
+  --color-room-outline: #2A3441;
+  --color-furniture-fill: #E8F0F8;
+  --color-furniture-border: #4A7AAB;
+  --color-success: #2E7D52;
+  --color-warning: #C17B10;
+  --color-error: #C0392B;
+  --color-snap-guide: #E8A020;
+
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+  --text-xs: 0.6875rem;
+  --text-sm: 0.75rem;
+  --text-base: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --shadow-modal: 0 4px 16px rgba(0,0,0,0.12);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--color-background);
+  color: var(--color-text);
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  overflow: hidden;
+}
+
+@media print {
+  #left-panel { display: none !important; }
+  #toolbar { display: none !important; }
+  #canvas {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+  }
+}
