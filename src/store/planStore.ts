@@ -297,77 +297,89 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           i === pointIndex ? newPosCm : p
         );
 
-        // Apply angle constraints.
-        // For each constraint, handle TWO cases:
-        //   Case A: User is dragging an ARM ENDPOINT (one of the two non-shared points).
-        //           → Project the dragged arm onto the direction that maintains the locked angle.
-        //   Case B: User is dragging the SHARED CORNER itself.
-        //           → Rigid body: translate both arm endpoints by the same delta.
+        // ── Angle constraints ────────────────────────────────────────────────
+        // For each locked corner, handle two cases:
+        //   Case A – arm endpoint is being dragged: project it onto the ray that
+        //            maintains the locked angle relative to the OTHER (fixed) arm.
+        //   Case B – shared corner itself is being dragged: translate both arm
+        //            endpoints by the same delta (rigid-body — angle is preserved).
         for (const c of state.room.constraints) {
-          const sharedIdx: number = c.sharedPointIndex;
-          const connectedWalls: typeof state.room.walls = state.room.walls.filter(
-            (w) => w.startPointIndex === sharedIdx || w.endPointIndex === sharedIdx
+          const sIdx: number = c.sharedPointIndex;
+          const armWalls: Wall[] = state.room.walls.filter(
+            (w) => w.startPointIndex === sIdx || w.endPointIndex === sIdx
           );
-          if (connectedWalls.length < 2) continue;
+          if (armWalls.length < 2) continue;
 
-          const wallA: (typeof connectedWalls)[number] = connectedWalls[0];
-          const wallB: (typeof connectedWalls)[number] = connectedWalls[1];
-          const arm1Idx = wallA.startPointIndex === sharedIdx ? wallA.endPointIndex : wallA.startPointIndex;
-          const arm2Idx = wallB.startPointIndex === sharedIdx ? wallB.endPointIndex : wallB.startPointIndex;
+          // Arm endpoint indices (the non-shared ends of the two walls)
+          const aIdx = armWalls[0].startPointIndex === sIdx
+            ? armWalls[0].endPointIndex
+            : armWalls[0].startPointIndex;
+          const bIdx = armWalls[1].startPointIndex === sIdx
+            ? armWalls[1].endPointIndex
+            : armWalls[1].startPointIndex;
 
-          const angleDeg = c.angleDeg ?? 90;
-          const angleRad = (angleDeg * Math.PI) / 180;
+          const angleRad = ((c.angleDeg ?? 90) * Math.PI) / 180;
+          const sharedPt = state.room.points[sIdx]; // always original — shared corner hasn't moved in Case A
 
-          if (pointIndex === sharedIdx) {
-            // ── Case B: shared corner drag → rigid body translate ──────────
-            const dX = newPoints[sharedIdx].x - state.room.points[sharedIdx].x;
-            const dY = newPoints[sharedIdx].y - state.room.points[sharedIdx].y;
-            newPoints[arm1Idx] = {
-              x: state.room.points[arm1Idx].x + dX,
-              y: state.room.points[arm1Idx].y + dY,
-            };
-            newPoints[arm2Idx] = {
-              x: state.room.points[arm2Idx].x + dX,
-              y: state.room.points[arm2Idx].y + dY,
-            };
-          } else if (pointIndex === arm1Idx || pointIndex === arm2Idx) {
-            // ── Case A: arm endpoint drag → project onto locked angle direction ──
-            const sharedPt = state.room.points[sharedIdx];
+          if (pointIndex === sIdx) {
+            // ── Case B: shared corner drag → translate both arm endpoints ────
+            const dX = newPoints[sIdx].x - sharedPt.x;
+            const dY = newPoints[sIdx].y - sharedPt.y;
+            // Don't translate arm endpoints that belong to a pinned wall
+            const aPinned = state.room.walls.some(
+              (w) => w.isPinned && (w.startPointIndex === aIdx || w.endPointIndex === aIdx)
+            );
+            const bPinned = state.room.walls.some(
+              (w) => w.isPinned && (w.startPointIndex === bIdx || w.endPointIndex === bIdx)
+            );
+            if (!aPinned) {
+              newPoints[aIdx] = { x: state.room.points[aIdx].x + dX, y: state.room.points[aIdx].y + dY };
+            }
+            if (!bPinned) {
+              newPoints[bIdx] = { x: state.room.points[bIdx].x + dX, y: state.room.points[bIdx].y + dY };
+            }
 
-            // The "fixed" arm is the other one (not being dragged)
-            const fixedArmIdx = pointIndex === arm1Idx ? arm2Idx : arm1Idx;
-            const fixedArmPt  = state.room.points[fixedArmIdx];
-            const fDx = fixedArmPt.x - sharedPt.x;
-            const fDy = fixedArmPt.y - sharedPt.y;
-            const fLen = Math.hypot(fDx, fDy);
-            if (fLen < 1) continue;
-            const fixedUx = fDx / fLen;
-            const fixedUy = fDy / fLen;
+          } else if (pointIndex === aIdx || pointIndex === bIdx) {
+            // ── Case A: arm endpoint drag → project onto locked-angle ray ───
+            // Fixed arm: the arm NOT being dragged (use original position — it didn't move)
+            const fixedIdx = pointIndex === aIdx ? bIdx : aIdx;
+            const fixedPt  = state.room.points[fixedIdx];
 
-            // Current direction of the arm being dragged (to choose the right ±angle side)
-            const movingPt = state.room.points[pointIndex];
-            const movingCurDx = movingPt.x - sharedPt.x;
-            const movingCurDy = movingPt.y - sharedPt.y;
+            // Direction from shared corner toward fixed arm endpoint
+            const fdx = fixedPt.x - sharedPt.x;
+            const fdy = fixedPt.y - sharedPt.y;
+            const fLen = Math.hypot(fdx, fdy);
+            if (fLen < 0.1) continue;
+            const fux = fdx / fLen;
+            const fuy = fdy / fLen;
 
-            // Two candidate directions at ±angleDeg from fixed arm
+            // Current direction of the moving arm (selects which side ±angle lands on)
+            const origPt  = state.room.points[pointIndex];
+            const curDx   = origPt.x - sharedPt.x;
+            const curDy   = origPt.y - sharedPt.y;
+
+            // Two candidate directions at ±angleDeg from the fixed arm direction
             const cos = Math.cos(angleRad), sin = Math.sin(angleRad);
-            const d1x = fixedUx * cos - fixedUy * sin;
-            const d1y = fixedUx * sin + fixedUy * cos;
-            const d2x = fixedUx * cos + fixedUy * sin;
-            const d2y = -fixedUx * sin + fixedUy * cos;
+            const d1 = { x: fux * cos - fuy * sin, y: fux * sin + fuy * cos };
+            const d2 = { x: fux * cos + fuy * sin, y: -fux * sin + fuy * cos };
 
-            // Pick the candidate closest to the wall's current direction
-            const dot1 = d1x * movingCurDx + d1y * movingCurDy;
-            const dot2 = d2x * movingCurDx + d2y * movingCurDy;
-            const targetDirX = dot1 >= dot2 ? d1x : d2x;
-            const targetDirY = dot1 >= dot2 ? d1y : d2y;
+            // Choose the candidate closest to the current wall orientation
+            const useD1 = (d1.x * curDx + d1.y * curDy) >= (d2.x * curDx + d2.y * curDy);
+            const dir = useD1 ? d1 : d2;
 
-            // Project the desired new position onto this direction from the shared corner
-            const toNew = { x: newPosCm.x - sharedPt.x, y: newPosCm.y - sharedPt.y };
-            const t = Math.max(50, toNew.x * targetDirX + toNew.y * targetDirY);
-            newPoints[pointIndex] = { x: sharedPt.x + t * targetDirX, y: sharedPt.y + t * targetDirY };
+            // Project the desired (already constraint-modified) new position onto this ray
+            const desired = newPoints[pointIndex]; // may already be adjusted by previous constraints
+            const dx = desired.x - sharedPt.x;
+            const dy = desired.y - sharedPt.y;
+            const proj = dx * dir.x + dy * dir.y;
+            const wallLen = Math.max(5, proj); // minimum 5 cm wall
+
+            newPoints[pointIndex] = {
+              x: sharedPt.x + wallLen * dir.x,
+              y: sharedPt.y + wallLen * dir.y,
+            };
           }
-          // If neither arm nor shared → this constraint doesn't affect this drag, skip.
+          // pointIndex unrelated to this constraint → skip
         }
 
         // ── Length (compass) constraint ──────────────────────────────────────

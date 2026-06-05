@@ -320,6 +320,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
           so x/y are in room-px space. Divide all pixel offsets by zoom. */}
       {cornerLockBtnPos && cornerLockWalls.length >= 2 && (
         <foreignObject
+          data-interactive="true"
           x={cornerLockBtnPos.x + 8 / zoom}
           y={cornerLockBtnPos.y - 80 / zoom}
           width={160 / zoom}
@@ -408,6 +409,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
       {/* Wall-selection Lock 90° floating button */}
       {wallLock90BtnPos && (
         <foreignObject
+          data-interactive="true"
           x={wallLock90BtnPos.x + 8 / zoom}
           y={wallLock90BtnPos.y - 36 / zoom}
           width={80 / zoom}
