@@ -76,7 +76,7 @@ function startDoorDrag(e: React.PointerEvent, type: 'door' | 'window') {
         wallId: nearest.wallId,
         positionOnWall: nearest.t,
         widthCm: DEFAULT_DOOR_WIDTH_CM,
-        opensTo: 'inside',
+        opensTo: 'outside',
         hingeSide: 'left',
       };
       state.addDoor(door);

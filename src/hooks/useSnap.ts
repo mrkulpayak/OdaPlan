@@ -1,5 +1,5 @@
 import { SNAP_DISTANCE_CM } from '../lib/constants';
-import { distancePointToSegment, segmentAngleDegrees } from '../lib/geometry';
+import { distancePointToSegment, segmentAngleDegrees, closestPointOnSegment } from '../lib/geometry';
 import type { Room, FurnitureInstance, FurnitureCatalogItem, FurnitureFrontSide } from '../types';
 
 export interface SnapResult {
@@ -93,8 +93,45 @@ export function computeSnap(
         }
         snappedRotation = 0;
       } else {
+        // Angled wall: use furniture CENTER distance to wall for trigger,
+        // then position the furniture flush against the wall with correct rotation.
+        const center = { x: pos.x + w / 2, y: pos.y + d / 2 };
+        const centerDist = distancePointToSegment(center, a, b);
+        if (centerDist >= bestDist || centerDist > SNAP_DISTANCE_CM) continue;
+
+        // Wall unit vector and inward normal
+        const wallLen = Math.hypot(b.x - a.x, b.y - a.y);
+        if (wallLen < 1) continue;
+        const ux = (b.x - a.x) / wallLen;
+        const uy = (b.y - a.y) / wallLen;
+        const nx = -uy; // inward normal (rotated 90° CCW from wall direction)
+        const ny = ux;
+
+        // Nearest point on wall to furniture center
+        const wallPt = closestPointOnSegment(center, a, b);
+
+        // Determine which side of the wall the furniture is on
+        // so we always snap to the SAME side (don't flip across the wall)
+        const wallToCenter = { x: center.x - wallPt.x, y: center.y - wallPt.y };
+        const sideSign = (wallToCenter.x * nx + wallToCenter.y * ny) >= 0 ? 1 : -1;
+
+        // When furniture rotation = wallAngleDeg, its "depth" axis aligns with the wall normal.
+        // The furniture center is offset from the wall by (d/2) along the normal.
+        const newCenter = {
+          x: wallPt.x + (d / 2) * sideSign * nx,
+          y: wallPt.y + (d / 2) * sideSign * ny,
+        };
+        snappedPos = { x: newCenter.x - w / 2, y: newCenter.y - d / 2 };
         snappedRotation = wallAngleDeg;
-        snappedPos = pos;
+
+        bestDist = centerDist;
+        bestResult = {
+          position: snappedPos,
+          rotation: snappedRotation,
+          snappedTo: { wallId: wall.id, side },
+          guideLines: [{ x1: a.x, y1: a.y, x2: b.x, y2: b.y }],
+        };
+        continue; // skip the common bestDist/bestResult assignment below
       }
 
       bestDist = dist;

@@ -11,13 +11,14 @@ export interface Wall {
   lockedLength?: number;
 }
 
-export type ConstraintType = '90deg';
+export type ConstraintType = 'angle';
 
 export interface Constraint {
   id: string;
   type: ConstraintType;
   wallAId: string;
   wallBId: string;
+  angleDeg: number; // locked angle between the two walls in degrees
 }
 
 export type DoorOpensTo = 'inside' | 'outside';

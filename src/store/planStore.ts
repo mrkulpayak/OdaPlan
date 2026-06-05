@@ -19,7 +19,7 @@ interface PlanActions {
   updateWindow: (id: string, updates: Partial<Window>) => void;
   removeWindow: (id: string) => void;
   createRoomFromPoints: (points: Point[]) => void;
-  addAngleConstraint: (wallAId: string, wallBId: string) => void;
+  addAngleConstraint: (wallAId: string, wallBId: string, angleDeg: number) => void;
   removeConstraint: (constraintId: string) => void;
   moveRoomPoint: (pointIndex: number, newPosCm: Point) => void;
   setCanvasState: (canvas: Partial<CanvasState>) => void;
@@ -233,16 +233,15 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         }));
       },
 
-      addAngleConstraint: (wallAId, wallBId) =>
+      addAngleConstraint: (wallAId, wallBId, angleDeg) =>
         set((s) => {
           if (!s.room) return s;
-          // Don't duplicate
-          const exists = s.room.constraints.some(
-            (c) => (c.wallAId === wallAId && c.wallBId === wallBId) || (c.wallAId === wallBId && c.wallBId === wallAId)
+          // Remove existing constraint between these walls (replace with new angle)
+          const filtered = s.room.constraints.filter(
+            (c) => !((c.wallAId === wallAId && c.wallBId === wallBId) || (c.wallAId === wallBId && c.wallBId === wallAId))
           );
-          if (exists) return s;
-          const constraint = { id: makeId(), type: '90deg' as const, wallAId, wallBId };
-          return { room: { ...s.room, constraints: [...s.room.constraints, constraint] } };
+          const constraint = { id: makeId(), type: 'angle' as const, wallAId, wallBId, angleDeg };
+          return { room: { ...s.room, constraints: [...filtered, constraint] } };
         }),
 
       removeConstraint: (constraintId) =>
@@ -266,8 +265,8 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           i === pointIndex ? newPosCm : p
         );
 
-        // Apply 90° constraints: instead of blocking movement, PROJECT the point
-        // onto the wall's original direction to maintain the angle.
+        // Apply angle constraints: project the dragged point onto the direction that
+        // maintains the locked angle between the two walls meeting at the shared corner.
         for (const c of state.room.constraints) {
           const wallA = state.room.walls.find((w) => w.id === c.wallAId);
           const wallB = state.room.walls.find((w) => w.id === c.wallBId);
@@ -282,25 +281,59 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           const aOtherIdx = sharedIdx === wallA.startPointIndex ? wallA.endPointIndex : wallA.startPointIndex;
           const bOtherIdx = sharedIdx === wallB.startPointIndex ? wallB.endPointIndex : wallB.startPointIndex;
 
-          // Only constrain when the moved point is a non-shared end of a constrained wall
           const isEndOfA = pointIndex === aOtherIdx;
           const isEndOfB = pointIndex === bOtherIdx;
           if (!isEndOfA && !isEndOfB) continue;
 
-          // Project newPosCm onto the original wall direction from the shared corner
-          const sharedPt = state.room.points[sharedIdx]; // original shared corner
-          const oldEndPt = state.room.points[pointIndex]; // original position of moved point
-          const dx = oldEndPt.x - sharedPt.x;
-          const dy = oldEndPt.y - sharedPt.y;
-          const len = Math.hypot(dx, dy);
-          if (len < 1) continue;
-          const ux = dx / len;
-          const uy = dy / len;
+          const sharedPt = state.room.points[sharedIdx];
+          // Support legacy constraints that may lack angleDeg
+          const angleDeg = c.angleDeg ?? 90;
+          const angleRad = (angleDeg * Math.PI) / 180;
 
-          // Project desired new position onto this ray
+          // Determine: fixed wall direction (the wall NOT being dragged)
+          // and current direction of the wall being dragged (to pick the right ±angle candidate)
+          let fixedUx: number, fixedUy: number;
+          let movingCurDx: number, movingCurDy: number;
+
+          if (isEndOfA) {
+            const bOtherPt = state.room.points[bOtherIdx];
+            const bDx = bOtherPt.x - sharedPt.x;
+            const bDy = bOtherPt.y - sharedPt.y;
+            const bLen = Math.hypot(bDx, bDy);
+            if (bLen < 1) continue;
+            fixedUx = bDx / bLen; fixedUy = bDy / bLen;
+            const aPt = state.room.points[aOtherIdx];
+            movingCurDx = aPt.x - sharedPt.x;
+            movingCurDy = aPt.y - sharedPt.y;
+          } else {
+            const aOtherPt = state.room.points[aOtherIdx];
+            const aDx = aOtherPt.x - sharedPt.x;
+            const aDy = aOtherPt.y - sharedPt.y;
+            const aLen = Math.hypot(aDx, aDy);
+            if (aLen < 1) continue;
+            fixedUx = aDx / aLen; fixedUy = aDy / aLen;
+            const bPt = state.room.points[bOtherIdx];
+            movingCurDx = bPt.x - sharedPt.x;
+            movingCurDy = bPt.y - sharedPt.y;
+          }
+
+          // Two candidate directions at ±angleDeg from fixed wall
+          const cos = Math.cos(angleRad), sin = Math.sin(angleRad);
+          const d1x = fixedUx * cos - fixedUy * sin;
+          const d1y = fixedUx * sin + fixedUy * cos;
+          const d2x = fixedUx * cos + fixedUy * sin;
+          const d2y = -fixedUx * sin + fixedUy * cos;
+
+          // Pick the candidate closest to the wall's current direction
+          const dot1 = d1x * movingCurDx + d1y * movingCurDy;
+          const dot2 = d2x * movingCurDx + d2y * movingCurDy;
+          const targetDirX = dot1 >= dot2 ? d1x : d2x;
+          const targetDirY = dot1 >= dot2 ? d1y : d2y;
+
+          // Project the desired new position onto this direction from the shared corner
           const toNew = { x: newPosCm.x - sharedPt.x, y: newPosCm.y - sharedPt.y };
-          const t = Math.max(50, toNew.x * ux + toNew.y * uy); // min 50 cm wall length
-          newPoints[pointIndex] = { x: sharedPt.x + t * ux, y: sharedPt.y + t * uy };
+          const t = Math.max(50, toNew.x * targetDirX + toNew.y * targetDirY);
+          newPoints[pointIndex] = { x: sharedPt.x + t * targetDirX, y: sharedPt.y + t * targetDirY };
         }
 
         // --- Move wall-snapped furniture with the wall ---
@@ -339,7 +372,13 @@ export const usePlanStore = create<PlanState & PlanActions>()(
             y: newA.y + tAlong * newUy + tPerp * newUx,
           };
 
-          return { ...fi, position: newPos };
+          // Also rotate furniture to match the new wall angle
+          const oldWallAngleDeg = Math.atan2(oldUy, oldUx) * (180 / Math.PI);
+          const newWallAngleDeg = Math.atan2(newUy, newUx) * (180 / Math.PI);
+          const angleDelta = newWallAngleDeg - oldWallAngleDeg;
+          const newRotation = ((fi.rotation + angleDelta) % 360 + 360) % 360;
+
+          return { ...fi, position: newPos, rotation: newRotation };
         });
 
         set({

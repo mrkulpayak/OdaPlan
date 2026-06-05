@@ -1,5 +1,5 @@
-import { memo, useRef, useState, useCallback } from 'react';
-import type { Room as RoomType, Point } from '../../types';
+import { memo, useRef, useState, useCallback, useEffect } from 'react';
+import type { Room as RoomType, Point, Wall as WallType } from '../../types';
 import { cmToPx, pxToCm } from '../../lib/geometry';
 import { Wall } from './Wall';
 import { FurnitureItem } from './FurnitureItem';
@@ -9,6 +9,21 @@ import { useUiStore } from '../../store/uiStore';
 import { useCatalogStore } from '../../store/catalogStore';
 
 const CORNER_DRAG_THRESHOLD_PX = 4;
+
+/** Compute the interior angle (degrees) between two walls meeting at sharedIdx */
+function computeCornerAngleDeg(pts: Point[], wallA: WallType, wallB: WallType, sharedIdx: number): number {
+  const aOtherIdx = wallA.startPointIndex === sharedIdx ? wallA.endPointIndex : wallA.startPointIndex;
+  const bOtherIdx = wallB.startPointIndex === sharedIdx ? wallB.endPointIndex : wallB.startPointIndex;
+  const shared = pts[sharedIdx];
+  const aOther = pts[aOtherIdx];
+  const bOther = pts[bOtherIdx];
+  const ax = aOther.x - shared.x, ay = aOther.y - shared.y;
+  const bx = bOther.x - shared.x, by = bOther.y - shared.y;
+  const aLen = Math.hypot(ax, ay), bLen = Math.hypot(bx, by);
+  if (aLen === 0 || bLen === 0) return 90;
+  const dot = Math.max(-1, Math.min(1, (ax * bx + ay * by) / (aLen * bLen)));
+  return Math.round(Math.acos(dot) * 180 / Math.PI);
+}
 
 interface Props {
   room: RoomType;
@@ -38,10 +53,25 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
   // Corner tap detection: track where pointer went down on a corner
   const cornerPointerStartRef = useRef<{ idx: number; x: number; y: number } | null>(null);
 
-  // Selected corner for 90° lock popup (set on tap, cleared on action or click-away)
+  // Selected corner for angle lock popup (set on tap, cleared on action or click-away)
   const [selectedCornerIdx, setSelectedCornerIdx] = useState<number | null>(null);
+  // Angle value in the popup input (initialized to current corner angle on selection)
+  const [cornerAngleInput, setCornerAngleInput] = useState<string>('90');
 
   const productMap = new Map(products.map((p) => [p.id, p]));
+
+  // When a new corner is selected, initialize the angle input to its current angle
+  useEffect(() => {
+    if (selectedCornerIdx === null) return;
+    const walls = room.walls.filter(
+      (w) => w.startPointIndex === selectedCornerIdx || w.endPointIndex === selectedCornerIdx
+    );
+    if (walls.length >= 2) {
+      const angle = computeCornerAngleDeg(room.points, walls[0], walls[1], selectedCornerIdx);
+      setCornerAngleInput(String(angle));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCornerIdx]);
 
   const svgToCm = useCallback((clientX: number, clientY: number): Point => {
     const canvas = usePlanStore.getState().canvas;
@@ -148,9 +178,14 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
 
   const handleLock90 = () => {
     if (!sharedCorner) return;
-    addAngleConstraint(sharedCorner.wallAId, sharedCorner.wallBId);
+    const wallA = room.walls.find((w) => w.id === sharedCorner.wallAId);
+    const wallB = room.walls.find((w) => w.id === sharedCorner.wallBId);
+    const angleDeg = (wallA && wallB)
+      ? computeCornerAngleDeg(room.points, wallA, wallB, sharedCorner.pointIndex)
+      : 90;
+    addAngleConstraint(sharedCorner.wallAId, sharedCorner.wallBId, angleDeg);
     clearWallSelection();
-    addToast({ type: 'success', message: '90° constraint applied.' });
+    addToast({ type: 'success', message: `${angleDeg}° constraint applied.` });
   };
 
   // --- Corner-tap based 90° lock button ---
@@ -177,12 +212,18 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
     : undefined;
 
   const handleCornerLockBtn = () => {
+    if (!cornerLockWalls.length) return;
+    const parsedAngle = parseInt(cornerAngleInput, 10);
+    const angleDeg = Number.isNaN(parsedAngle) ? 90 : Math.max(5, Math.min(175, parsedAngle));
+    addAngleConstraint(cornerLockWalls[0].id, cornerLockWalls[1].id, angleDeg);
+    addToast({ type: 'success', message: `${angleDeg}° kilitlendi.` });
+    setSelectedCornerIdx(null);
+  };
+
+  const handleCornerUnlockBtn = () => {
     if (cornerExistingConstraint) {
       removeConstraint(cornerExistingConstraint.id);
-      addToast({ type: 'success', message: 'Constraint removed.' });
-    } else if (cornerLockWalls.length >= 2) {
-      addAngleConstraint(cornerLockWalls[0].id, cornerLockWalls[1].id);
-      addToast({ type: 'success', message: '90° constraint applied.' });
+      addToast({ type: 'success', message: 'Kilit kaldırıldı.' });
     }
     setSelectedCornerIdx(null);
   };
@@ -279,38 +320,92 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
         })}
       </g>
 
-      {/* Corner-tap Lock 90° floating button
+      {/* Corner-tap angle lock popup
           foreignObject is inside <g transform="translate(panX,panY) scale(zoom)">,
-          so x/y are in room-px space. Divide offsets by zoom to keep button
-          the same apparent size regardless of zoom level. */}
+          so x/y are in room-px space. Divide all pixel offsets by zoom. */}
       {cornerLockBtnPos && cornerLockWalls.length >= 2 && (
         <foreignObject
           x={cornerLockBtnPos.x + 8 / zoom}
-          y={cornerLockBtnPos.y - 36 / zoom}
-          width={90 / zoom}
-          height={26 / zoom}
+          y={cornerLockBtnPos.y - 80 / zoom}
+          width={160 / zoom}
+          height={80 / zoom}
           style={{ overflow: 'visible', pointerEvents: 'auto' }}
         >
-          <div style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'top left', width: '90px', height: '26px' }}>
-            <button
-              onClick={handleCornerLockBtn}
-              style={{
-                fontFamily: 'var(--font-body)',
-                fontSize: '11px',
-                background: cornerExistingConstraint ? '#888' : 'var(--color-primary)',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '3px',
-                padding: '4px 8px',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
-                width: '90px',
-                height: '26px',
-              }}
-            >
-              {cornerExistingConstraint ? 'Unlock 90°' : 'Lock 90°'}
-            </button>
+          <div style={{
+            transform: `scale(${1 / zoom})`,
+            transformOrigin: 'top left',
+            width: '160px',
+            background: '#fff',
+            border: '1px solid #ddd',
+            borderRadius: '4px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+            padding: '8px',
+            fontFamily: 'var(--font-body)',
+          }}>
+            {/* Label row */}
+            <div style={{ fontSize: '10px', color: '#888', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Köşe açısı</span>
+              {cornerExistingConstraint && (
+                <span style={{ color: 'var(--color-primary)', fontWeight: 600 }}>
+                  Kilitli: {cornerExistingConstraint.angleDeg ?? 90}°
+                </span>
+              )}
+            </div>
+            {/* Input + button row */}
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+              <input
+                type="number"
+                min={5}
+                max={175}
+                value={cornerAngleInput}
+                onChange={(e) => setCornerAngleInput(e.target.value)}
+                style={{
+                  width: '52px',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '12px',
+                  border: '1px solid #ccc',
+                  borderRadius: '3px',
+                  padding: '3px 5px',
+                  textAlign: 'right',
+                }}
+              />
+              <span style={{ fontSize: '12px', color: '#555' }}>°</span>
+              <button
+                onClick={handleCornerLockBtn}
+                style={{
+                  flex: 1,
+                  fontFamily: 'var(--font-body)',
+                  fontSize: '11px',
+                  background: 'var(--color-primary)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '3px',
+                  padding: '4px 6px',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Kilitle
+              </button>
+              {cornerExistingConstraint && (
+                <button
+                  onClick={handleCornerUnlockBtn}
+                  style={{
+                    fontFamily: 'var(--font-body)',
+                    fontSize: '11px',
+                    background: '#888',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '3px',
+                    padding: '4px 6px',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Aç
+                </button>
+              )}
+            </div>
           </div>
         </foreignObject>
       )}
@@ -342,7 +437,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
                 height: '26px',
               }}
             >
-              Lock 90°
+              Açıyı Kilitle
             </button>
           </div>
         </foreignObject>
