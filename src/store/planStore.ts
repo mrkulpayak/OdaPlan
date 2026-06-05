@@ -255,10 +255,70 @@ export const usePlanStore = create<PlanState & PlanActions>()(
       addAngleConstraint: (sharedPointIndex, angleDeg) =>
         set((s) => {
           if (!s.room) return s;
-          // Replace any existing constraint at this corner
+
+          // Find the two walls that meet at this corner
+          const armWalls: Wall[] = s.room.walls.filter(
+            (w) => w.startPointIndex === sharedPointIndex || w.endPointIndex === sharedPointIndex
+          );
+          if (armWalls.length < 2) {
+            // Not a real corner — just save the constraint without repositioning
+            const filtered = s.room.constraints.filter((c) => c.sharedPointIndex !== sharedPointIndex);
+            return { room: { ...s.room, constraints: [...filtered, { id: makeId(), type: 'angle' as const, sharedPointIndex, angleDeg }] } };
+          }
+
+          const wall0 = armWalls[0];
+          const wall1 = armWalls[1];
+          const arm0Idx = wall0.startPointIndex === sharedPointIndex ? wall0.endPointIndex : wall0.startPointIndex;
+          const arm1Idx = wall1.startPointIndex === sharedPointIndex ? wall1.endPointIndex : wall1.startPointIndex;
+
+          // Fixed arm = pinned wall's arm (if any), otherwise arm0
+          // Moving arm = the other one
+          const fixedArmIdx = wall1.isPinned ? arm1Idx : arm0Idx;
+          const movingArmIdx = wall1.isPinned ? arm0Idx : arm1Idx;
+
+          const shared = s.room.points[sharedPointIndex];
+          const fixedPt = s.room.points[fixedArmIdx];
+          const movingPt = s.room.points[movingArmIdx];
+
+          // Direction from shared toward fixed arm
+          const fdx = fixedPt.x - shared.x;
+          const fdy = fixedPt.y - shared.y;
+          const fLen = Math.hypot(fdx, fdy);
+
+          // Distance of the moving arm from shared (preserve wall length)
+          const mdx = movingPt.x - shared.x;
+          const mdy = movingPt.y - shared.y;
+          const mLen = Math.hypot(mdx, mdy);
+
+          let newPoints = s.room.points;
+
+          if (fLen > 0.1 && mLen > 0.1) {
+            const fux = fdx / fLen;
+            const fuy = fdy / fLen;
+
+            const rad = (angleDeg * Math.PI) / 180;
+            const cos = Math.cos(rad), sin = Math.sin(rad);
+
+            // Two candidate directions at ±angleDeg from fixed arm
+            const d1 = { x: fux * cos - fuy * sin, y: fux * sin + fuy * cos };
+            const d2 = { x: fux * cos + fuy * sin, y: -fux * sin + fuy * cos };
+
+            // Pick the side closest to the moving arm's current direction
+            const useD1 = (d1.x * mdx + d1.y * mdy) >= (d2.x * mdx + d2.y * mdy);
+            const dir = useD1 ? d1 : d2;
+
+            // Reposition moving arm: same distance from shared, new direction
+            const newMovingPt = {
+              x: shared.x + mLen * dir.x,
+              y: shared.y + mLen * dir.y,
+            };
+            newPoints = s.room.points.map((p, i) => i === movingArmIdx ? newMovingPt : p);
+          }
+
+          // Save constraint and apply the repositioned points
           const filtered = s.room.constraints.filter((c) => c.sharedPointIndex !== sharedPointIndex);
           const constraint = { id: makeId(), type: 'angle' as const, sharedPointIndex, angleDeg };
-          return { room: { ...s.room, constraints: [...filtered, constraint] } };
+          return { room: { ...s.room, points: newPoints, constraints: [...filtered, constraint] } };
         }),
 
       removeConstraint: (constraintId) =>
