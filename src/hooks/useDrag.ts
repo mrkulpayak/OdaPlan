@@ -85,28 +85,57 @@ function clearSnapGuides() {
   if (guide) guide.innerHTML = '';
 }
 
+// Helper: get pointer position in canvas cm coordinates
+function getPointerCm(clientX: number, clientY: number) {
+  const canvasSvg = document.querySelector('#canvas svg') as SVGSVGElement | null;
+  if (!canvasSvg) return null;
+  const r = canvasSvg.getBoundingClientRect();
+  const state = usePlanStore.getState();
+  const { canvas } = state;
+  const svgX = clientX - r.left;
+  const svgY = clientY - r.top;
+  return {
+    cmX: pxToCm((svgX - canvas.panX) / canvas.zoom),
+    cmY: pxToCm((svgY - canvas.panY) / canvas.zoom),
+  };
+}
+
 export function useDrag() {
   const addFurnitureInstance = usePlanStore((s) => s.addFurnitureInstance);
   const updateFurnitureInstance = usePlanStore((s) => s.updateFurnitureInstance);
   const planStore = usePlanStore;
   const setSelectedItemId = useUiStore((s) => s.setSelectedItemId);
 
+  // dragOffset: distance from pointer (in cm) to furniture top-left corner at drag start
   const dragState = useRef<{
     item: FurnitureCatalogItem;
-    instanceId?: string; // set when moving existing furniture
+    instanceId?: string;
     mode: 'catalog' | 'move';
+    dragOffset: { x: number; y: number };
   } | null>(null);
 
   const startDrag = useCallback((e: React.PointerEvent, item: FurnitureCatalogItem) => {
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragState.current = { item, mode: 'catalog' };
+    // Catalog drag: center furniture at cursor
+    dragState.current = {
+      item,
+      mode: 'catalog',
+      dragOffset: { x: item.widthCm / 2, y: item.depthCm / 2 },
+    };
     const state = planStore.getState();
     updateGhost(e.clientX, e.clientY, item, state.canvas.zoom);
   }, [planStore]);
 
   const startMoveDrag = useCallback((e: React.PointerEvent, instance: FurnitureInstance, item: FurnitureCatalogItem) => {
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragState.current = { item, instanceId: instance.id, mode: 'move' };
+
+    // Compute offset: where the pointer is relative to the furniture's top-left corner
+    const cm = getPointerCm(e.clientX, e.clientY);
+    const dragOffset = cm
+      ? { x: cm.cmX - instance.position.x, y: cm.cmY - instance.position.y }
+      : { x: item.widthCm / 2, y: item.depthCm / 2 };
+
+    dragState.current = { item, instanceId: instance.id, mode: 'move', dragOffset };
     const state = planStore.getState();
     updateGhost(e.clientX, e.clientY, item, state.canvas.zoom);
   }, [planStore]);
@@ -118,17 +147,13 @@ export function useDrag() {
 
     updateGhost(e.clientX, e.clientY, dragState.current.item, canvas.zoom);
 
-    // Compute canvas position in cm
-    const canvasSvg = document.querySelector('#canvas svg') as SVGSVGElement | null;
-    if (!canvasSvg) return;
-    const r = canvasSvg.getBoundingClientRect();
-    const svgX = e.clientX - r.left;
-    const svgY = e.clientY - r.top;
-    const cmX = pxToCm((svgX - canvas.panX) / canvas.zoom);
-    const cmY = pxToCm((svgY - canvas.panY) / canvas.zoom);
+    const cm = getPointerCm(e.clientX, e.clientY);
+    if (!cm) return;
+    const { cmX, cmY } = cm;
 
     const item = dragState.current.item;
-    const pos = { x: cmX - item.widthCm / 2, y: cmY - item.depthCm / 2 };
+    const { dragOffset } = dragState.current;
+    const pos = { x: cmX - dragOffset.x, y: cmY - dragOffset.y };
 
     const otherInstances = dragState.current.instanceId
       ? furnitureInstances.filter((fi) => fi.id !== dragState.current!.instanceId)
@@ -147,7 +172,6 @@ export function useDrag() {
     const state = planStore.getState();
     const { canvas, room, furnitureInstances } = state;
 
-    // Check if pointer is over canvas
     const canvasSvg = document.querySelector('#canvas svg') as SVGSVGElement | null;
     removeGhost();
     clearSnapGuides();
@@ -157,13 +181,13 @@ export function useDrag() {
       const svgX = e.clientX - r.left;
       const svgY = e.clientY - r.top;
 
-      // Check bounds
       if (svgX >= 0 && svgX <= r.width && svgY >= 0 && svgY <= r.height) {
         const cmX = pxToCm((svgX - canvas.panX) / canvas.zoom);
         const cmY = pxToCm((svgY - canvas.panY) / canvas.zoom);
 
         const item = dragState.current.item;
-        const pos = { x: cmX - item.widthCm / 2, y: cmY - item.depthCm / 2 };
+        const { dragOffset } = dragState.current;
+        const pos = { x: cmX - dragOffset.x, y: cmY - dragOffset.y };
 
         const otherInstances = dragState.current.instanceId
           ? furnitureInstances.filter((fi) => fi.id !== dragState.current!.instanceId)

@@ -1,4 +1,4 @@
-import { memo, useRef, useEffect, useCallback } from 'react';
+import { memo, useRef, useState, useCallback } from 'react';
 import type { Room as RoomType, Point } from '../../types';
 import { cmToPx, pxToCm } from '../../lib/geometry';
 import { Wall } from './Wall';
@@ -7,6 +7,8 @@ import { ConstraintSymbol } from './ConstraintSymbol';
 import { usePlanStore } from '../../store/planStore';
 import { useUiStore } from '../../store/uiStore';
 import { useCatalogStore } from '../../store/catalogStore';
+
+const CORNER_DRAG_THRESHOLD_PX = 4;
 
 interface Props {
   room: RoomType;
@@ -30,15 +32,16 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
   const products = useCatalogStore((s) => s.products);
 
   const canvasDims = useRef({ width: 800, height: 600 });
-  const draggingPointRef = useRef<number | null>(null);
-  const productMap = new Map(products.map((p) => [p.id, p]));
 
-  useEffect(() => {
-    if (canvasRef.current) {
-      const r = canvasRef.current.getBoundingClientRect();
-      canvasDims.current = { width: r.width, height: r.height };
-    }
-  });
+  // Corner dragging state
+  const draggingPointRef = useRef<number | null>(null);
+  // Corner tap detection: track where pointer went down on a corner
+  const cornerPointerStartRef = useRef<{ idx: number; x: number; y: number } | null>(null);
+
+  // Selected corner for 90° lock popup (set on tap, cleared on action or click-away)
+  const [selectedCornerIdx, setSelectedCornerIdx] = useState<number | null>(null);
+
+  const productMap = new Map(products.map((p) => [p.id, p]));
 
   const svgToCm = useCallback((clientX: number, clientY: number): Point => {
     const canvas = usePlanStore.getState().canvas;
@@ -50,6 +53,8 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
   }, [canvasRef]);
 
   const handleCommitLength = (wallId: string, newLengthCm: number) => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    canvasDims.current = r ? { width: r.width, height: r.height } : canvasDims.current;
     const result = updateWallLength(wallId, newLengthCm, canvasDims.current.width, canvasDims.current.height);
     if (result.blocked && result.reason) {
       addToast({ type: 'warning', message: result.reason });
@@ -57,30 +62,82 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
   };
 
   const handleWallClick = (wallId: string, e: React.PointerEvent) => {
+    setSelectedCornerIdx(null);
     toggleWallSelection(wallId, e.shiftKey);
     setSelectedItemId(null);
   };
 
-  // Check if 2 selected walls share a corner and are already at 90°
+  // --- Corner pointer handlers ---
+  const handleCornerPointerDown = (e: React.PointerEvent, idx: number) => {
+    e.stopPropagation();
+    setSelectedItemId(null);
+    cornerPointerStartRef.current = { idx, x: e.clientX, y: e.clientY };
+    (e.target as Element).setPointerCapture(e.pointerId);
+  };
+
+  const handleCornerPointerMove = (e: React.PointerEvent, idx: number) => {
+    e.stopPropagation(); // always prevent canvas from panning
+
+    if (draggingPointRef.current === idx) {
+      // Already dragging — move the point
+      const cm = svgToCm(e.clientX, e.clientY);
+      moveRoomPoint(idx, cm);
+      return;
+    }
+
+    // Check if threshold has been exceeded to start dragging
+    const start = cornerPointerStartRef.current;
+    if (!start || start.idx !== idx) return;
+
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (Math.hypot(dx, dy) > CORNER_DRAG_THRESHOLD_PX) {
+      // Threshold exceeded → start drag
+      const connectedWalls = room.walls.filter(
+        (w) => w.startPointIndex === idx || w.endPointIndex === idx
+      );
+      if (connectedWalls.some((w) => w.isLengthLocked)) {
+        addToast({ type: 'warning', message: 'Cannot drag a corner connected to a locked wall.' });
+        cornerPointerStartRef.current = null;
+        return;
+      }
+      cornerPointerStartRef.current = null;
+      draggingPointRef.current = idx;
+      setSelectedCornerIdx(null);
+      const cm = svgToCm(e.clientX, e.clientY);
+      moveRoomPoint(idx, cm);
+    }
+  };
+
+  const handleCornerPointerUp = (_e: React.PointerEvent, idx: number) => {
+    const wasDragging = draggingPointRef.current === idx;
+    draggingPointRef.current = null;
+
+    const start = cornerPointerStartRef.current;
+    cornerPointerStartRef.current = null;
+
+    if (!wasDragging && start?.idx === idx) {
+      // Was a tap (no drag) → toggle corner selection for 90° lock
+      setSelectedCornerIdx((prev) => (prev === idx ? null : idx));
+      clearWallSelection();
+    }
+  };
+
+  // --- Wall-selection based Lock 90° (existing) ---
   const getSharedCorner = (): { pointIndex: number; wallAId: string; wallBId: string } | null => {
     if (selectedWallIds.length !== 2) return null;
     const [aId, bId] = selectedWallIds;
     const wallA = room.walls.find((w) => w.id === aId);
     const wallB = room.walls.find((w) => w.id === bId);
     if (!wallA || !wallB) return null;
-
-    // Find shared point index
     const aIndices = [wallA.startPointIndex, wallA.endPointIndex];
     const bIndices = [wallB.startPointIndex, wallB.endPointIndex];
     const shared = aIndices.find((i) => bIndices.includes(i));
     if (shared === undefined) return null;
-
     return { pointIndex: shared, wallAId: aId, wallBId: bId };
   };
 
   const sharedCorner = getSharedCorner();
-
-  // Check if existing constraint covers the selected walls
   const alreadyConstrained = sharedCorner
     ? room.constraints.some(
         (c) =>
@@ -96,42 +153,54 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
     addToast({ type: 'success', message: '90° constraint applied.' });
   };
 
-  // Corner point dragging
-  const handleCornerPointerDown = (e: React.PointerEvent, idx: number) => {
-    e.stopPropagation();
-    const connectedWalls = room.walls.filter(
-      (w) => w.startPointIndex === idx || w.endPointIndex === idx
-    );
-    if (connectedWalls.some((w) => w.isLengthLocked)) {
-      addToast({ type: 'warning', message: 'Cannot drag a corner connected to a locked wall.' });
-      return;
+  // --- Corner-tap based 90° lock button ---
+  const cornerLockBtnPos = (() => {
+    const idx = selectedCornerIdx;
+    if (idx === null) return null;
+    const canvas = usePlanStore.getState().canvas;
+    const pt = room.points[idx];
+    const svgX = cmToPx(pt.x) * canvas.zoom + canvas.panX;
+    const svgY = cmToPx(pt.y) * canvas.zoom + canvas.panY;
+    return { x: svgX + 12, y: svgY - 36 };
+  })();
+
+  const cornerLockWalls = selectedCornerIdx !== null
+    ? room.walls.filter(
+        (w) => w.startPointIndex === selectedCornerIdx || w.endPointIndex === selectedCornerIdx
+      )
+    : [];
+
+  const cornerExistingConstraint = cornerLockWalls.length >= 2
+    ? room.constraints.find(
+        (c) =>
+          (c.wallAId === cornerLockWalls[0].id && c.wallBId === cornerLockWalls[1].id) ||
+          (c.wallAId === cornerLockWalls[1].id && c.wallBId === cornerLockWalls[0].id)
+      )
+    : undefined;
+
+  const handleCornerLockBtn = () => {
+    if (cornerExistingConstraint) {
+      removeConstraint(cornerExistingConstraint.id);
+      addToast({ type: 'success', message: 'Constraint removed.' });
+    } else if (cornerLockWalls.length >= 2) {
+      addAngleConstraint(cornerLockWalls[0].id, cornerLockWalls[1].id);
+      addToast({ type: 'success', message: '90° constraint applied.' });
     }
-    draggingPointRef.current = idx;
-    (e.target as Element).setPointerCapture(e.pointerId);
-  };
-
-  const handleCornerPointerMove = (e: React.PointerEvent, idx: number) => {
-    if (draggingPointRef.current !== idx) return;
-    const cm = svgToCm(e.clientX, e.clientY);
-    moveRoomPoint(idx, cm);
-  };
-
-  const handleCornerPointerUp = () => {
-    draggingPointRef.current = null;
+    setSelectedCornerIdx(null);
   };
 
   const pointsStr = room.points
     .map((p) => `${cmToPx(p.x)},${cmToPx(p.y)}`)
     .join(' ');
 
-  // Lock 90° button position (screen coords via SVG)
-  let lock90BtnPos: { x: number; y: number } | null = null;
+  // Wall-selection Lock 90° button position
+  let wallLock90BtnPos: { x: number; y: number } | null = null;
   if (sharedCorner && !alreadyConstrained) {
     const canvas = usePlanStore.getState().canvas;
     const pt = room.points[sharedCorner.pointIndex];
     const svgX = cmToPx(pt.x) * canvas.zoom + canvas.panX;
     const svgY = cmToPx(pt.y) * canvas.zoom + canvas.panY;
-    lock90BtnPos = { x: svgX + 16, y: svgY - 32 };
+    wallLock90BtnPos = { x: svgX + 16, y: svgY - 32 };
   }
 
   return (
@@ -190,18 +259,20 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
           );
         })}
 
-        {/* Corner points — draggable */}
+        {/* Corner points — draggable; tappable for 90° lock */}
         {room.points.map((p, i) => (
           <circle
             key={i}
             cx={cmToPx(p.x)}
             cy={cmToPx(p.y)}
-            r={5}
-            fill="var(--color-room-outline)"
+            r={selectedCornerIdx === i ? 7 : 5}
+            fill={selectedCornerIdx === i ? 'var(--color-primary)' : 'var(--color-room-outline)'}
+            stroke={selectedCornerIdx === i ? '#fff' : 'none'}
+            strokeWidth={1.5}
             style={{ cursor: 'grab' }}
             onPointerDown={(e) => handleCornerPointerDown(e, i)}
             onPointerMove={(e) => handleCornerPointerMove(e, i)}
-            onPointerUp={handleCornerPointerUp}
+            onPointerUp={(e) => handleCornerPointerUp(e, i)}
           />
         ))}
 
@@ -213,11 +284,40 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
         })}
       </g>
 
-      {/* Lock 90° floating button — rendered as SVG foreignObject to stay in coordinate space */}
-      {lock90BtnPos && (
+      {/* Corner-tap Lock 90° floating button */}
+      {cornerLockBtnPos && cornerLockWalls.length >= 2 && (
         <foreignObject
-          x={lock90BtnPos.x}
-          y={lock90BtnPos.y}
+          x={cornerLockBtnPos.x}
+          y={cornerLockBtnPos.y}
+          width={100}
+          height={28}
+          style={{ overflow: 'visible', pointerEvents: 'auto' }}
+        >
+          <button
+            onClick={handleCornerLockBtn}
+            style={{
+              fontFamily: 'var(--font-body)',
+              fontSize: '11px',
+              background: cornerExistingConstraint ? 'var(--color-text-muted, #888)' : 'var(--color-primary)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '3px',
+              padding: '4px 8px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+            }}
+          >
+            {cornerExistingConstraint ? 'Unlock 90°' : 'Lock 90°'}
+          </button>
+        </foreignObject>
+      )}
+
+      {/* Wall-selection Lock 90° floating button */}
+      {wallLock90BtnPos && (
+        <foreignObject
+          x={wallLock90BtnPos.x}
+          y={wallLock90BtnPos.y}
           width={80}
           height={28}
           style={{ overflow: 'visible', pointerEvents: 'auto' }}

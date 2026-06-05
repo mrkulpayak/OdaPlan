@@ -42,7 +42,26 @@ export function computeSnap(
   let bestDist = SNAP_DISTANCE_CM + 1;
   let bestResult: SnapResult | null = null;
 
-  // --- Wall snap (Priority 1) ---
+  // --- Corner snap (Priority 1) — snap furniture corner to room corner ---
+  // Checked FIRST so furniture lands flush against both walls at a corner.
+  const corners = furnitureCorners(pos, w, d);
+  for (const roomCorner of room.points) {
+    for (const fc of corners) {
+      const dist = Math.hypot(fc.x - roomCorner.x, fc.y - roomCorner.y);
+      if (dist < SNAP_DISTANCE_CM && dist < bestDist) {
+        bestDist = dist;
+        bestResult = {
+          position: { x: pos.x + (roomCorner.x - fc.x), y: pos.y + (roomCorner.y - fc.y) },
+          rotation: 0,
+          guideLines: [],
+        };
+      }
+    }
+  }
+
+  if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
+
+  // --- Wall snap (Priority 2) ---
   const mids = furnitureSideMidpoints(pos, w, d);
   const sideEntries = Object.entries(mids) as Array<[FurnitureFrontSide, { x: number; y: number }]>;
 
@@ -65,7 +84,7 @@ export function computeSnap(
           const wallY = a.y;
           if (side === 'top') snappedPos = { x: pos.x, y: wallY };
           else if (side === 'bottom') snappedPos = { x: pos.x, y: wallY - d };
-          else continue; // left/right sides against horizontal wall — not natural
+          else continue;
         } else {
           const wallX = a.x;
           if (side === 'left') snappedPos = { x: wallX, y: pos.y };
@@ -74,10 +93,8 @@ export function computeSnap(
         }
         snappedRotation = 0;
       } else {
-        // Angled wall — rotate furniture to align with wall
-        // snap bottom side of furniture to wall by default
         snappedRotation = wallAngleDeg;
-        snappedPos = pos; // position stays (simplified; full math would project onto wall)
+        snappedPos = pos;
       }
 
       bestDist = dist;
@@ -87,24 +104,6 @@ export function computeSnap(
         snappedTo: { wallId: wall.id, side },
         guideLines: [{ x1: a.x, y1: a.y, x2: b.x, y2: b.y }],
       };
-    }
-  }
-
-  if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
-
-  // --- Corner snap (Priority 2) ---
-  const corners = furnitureCorners(pos, w, d);
-  for (const corner of room.points) {
-    for (const fc of corners) {
-      const dist = Math.hypot(fc.x - corner.x, fc.y - corner.y);
-      if (dist < SNAP_DISTANCE_CM && dist < bestDist) {
-        bestDist = dist;
-        bestResult = {
-          position: { x: pos.x + (corner.x - fc.x), y: pos.y + (corner.y - fc.y) },
-          rotation: 0,
-          guideLines: [],
-        };
-      }
     }
   }
 
