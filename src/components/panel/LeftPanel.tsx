@@ -5,16 +5,18 @@ import { RoomSection } from './RoomSection';
 import { FurnitureSection } from './FurnitureSection';
 import { DoorsWindowsSection } from './DoorsWindowsSection';
 import { FavoritesSection } from './FavoritesSection';
+import { CustomShapesSection } from './CustomShapesSection';
 import { AddProductModal } from '../modals/AddProductModal';
 
-type SectionId = 'room' | 'doors-windows' | 'furniture' | 'favorites' | 'add-product';
+type SectionId = 'room' | 'doors-windows' | 'furniture' | 'favorites' | 'custom-shapes' | 'add-product';
 
 const sections: { id: SectionId; label: string }[] = [
-  { id: 'room', label: 'Room' },
-  { id: 'doors-windows', label: 'Doors & Windows' },
-  { id: 'furniture', label: 'Furniture' },
-  { id: 'favorites', label: 'Favorites' },
-  { id: 'add-product', label: 'Add New Product' },
+  { id: 'room', label: 'Oda' },
+  { id: 'doors-windows', label: 'Kapı, Pencere & Kolon' },
+  { id: 'furniture', label: 'Mobilya' },
+  { id: 'favorites', label: 'Favoriler' },
+  { id: 'custom-shapes', label: 'Özel Şekiller' },
+  { id: 'add-product', label: 'Yeni Ürün Ekle' },
 ];
 
 function SectionContent({ id, dealerId }: { id: SectionId; dealerId: string }) {
@@ -22,6 +24,7 @@ function SectionContent({ id, dealerId }: { id: SectionId; dealerId: string }) {
   if (id === 'doors-windows') return <DoorsWindowsSection />;
   if (id === 'furniture') return <FurnitureSection dealerId={dealerId} />;
   if (id === 'favorites') return <FavoritesSection />;
+  if (id === 'custom-shapes') return <CustomShapesSection />;
   return null;
 }
 

@@ -19,11 +19,12 @@ interface Props {
   onSelectDoor: (id: string) => void;
   onSelectWindow: (id: string) => void;
   onWallClick: (wallId: string, e: React.PointerEvent) => void;
+  isDraggable?: boolean;
 }
 
 export const Wall = memo(function Wall({
   wall, points, doors, windows, viewRotation, zoom, isSelected,
-  onCommitLength, onToggleLock, onTogglePin, onSelectDoor, onSelectWindow, onWallClick,
+  onCommitLength, onToggleLock, onTogglePin, onSelectDoor, onSelectWindow, onWallClick, isDraggable,
 }: Props) {
   const aCm = points[wall.startPointIndex];
   const bCm = points[wall.endPointIndex];
@@ -70,12 +71,12 @@ export const Wall = memo(function Wall({
 
   return (
     <g>
-      {/* Invisible wide hit area for wall click */}
+      {/* Invisible wide hit area for wall click / drag */}
       <line
         x1={aPx.x} y1={aPx.y} x2={bPx.x} y2={bPx.y}
         stroke="transparent"
         strokeWidth={12}
-        style={{ cursor: 'pointer' }}
+        style={{ cursor: isDraggable ? 'grab' : 'pointer' }}
         onPointerDown={(e) => { e.stopPropagation(); onWallClick(wall.id, e); }}
       />
       {wallLines.map((seg, i) => (

@@ -3,12 +3,15 @@ import type { Room as RoomType, Point, Wall as WallType } from '../../types';
 import { cmToPx, pxToCm } from '../../lib/geometry';
 import { Wall } from './Wall';
 import { FurnitureItem } from './FurnitureItem';
+import { ColumnItem } from './ColumnItem';
+import { CustomShapeItem } from './CustomShapeItem';
 import { ConstraintSymbol } from './ConstraintSymbol';
 import { usePlanStore } from '../../store/planStore';
 import { useUiStore } from '../../store/uiStore';
 import { useCatalogStore } from '../../store/catalogStore';
 
 const CORNER_DRAG_THRESHOLD_PX = 4;
+const WALL_DRAG_THRESHOLD_PX = 4;
 
 /** Compute the interior angle (degrees) between two walls meeting at sharedIdx */
 function computeCornerAngleDeg(pts: Point[], wallA: WallType, wallB: WallType, sharedIdx: number): number {
@@ -39,7 +42,10 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
   const addAngleConstraint = usePlanStore((s) => s.addAngleConstraint);
   const removeConstraint = usePlanStore((s) => s.removeConstraint);
   const moveRoomPoint = usePlanStore((s) => s.moveRoomPoint);
+  const translateWall = usePlanStore((s) => s.translateWall);
+  const snapWallStraight = usePlanStore((s) => s.snapWallStraight);
   const furnitureInstances = usePlanStore((s) => s.furnitureInstances);
+  const customShapeInstances = usePlanStore((s) => s.customShapeInstances);
   const addToast = useUiStore((s) => s.addToast);
   const setSelectedItemId = useUiStore((s) => s.setSelectedItemId);
   const selectedWallIds = useUiStore((s) => s.selectedWallIds);
@@ -53,6 +59,20 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
   const draggingPointRef = useRef<number | null>(null);
   // Corner tap detection: track where pointer went down on a corner
   const cornerPointerStartRef = useRef<{ idx: number; x: number; y: number } | null>(null);
+
+  // Wall drag state
+  interface WallDragState {
+    wallId: string;
+    startClientX: number;
+    startClientY: number;
+    /** Wall normal unit vector (perpendicular direction for constrained drag) */
+    nx: number;
+    ny: number;
+    /** Accumulated perpendicular translation applied so far (cm) */
+    lastT: number;
+    isDragging: boolean;
+  }
+  const wallDragRef = useRef<WallDragState | null>(null);
 
   // Selected corner for angle lock popup (set on tap, cleared on action or click-away)
   const [selectedCornerIdx, setSelectedCornerIdx] = useState<number | null>(null);
@@ -92,10 +112,94 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
     }
   };
 
-  const handleWallClick = (wallId: string, e: React.PointerEvent) => {
-    setSelectedCornerIdx(null);
-    toggleWallSelection(wallId, e.shiftKey);
-    setSelectedItemId(null);
+  /** Returns true if the wall can be dragged (not pinned, no pinned adjacent walls) */
+  const isWallDraggable = (wallId: string): boolean => {
+    const wall = room.walls.find((w) => w.id === wallId);
+    if (!wall || wall.isPinned) return false;
+    const p1 = wall.startPointIndex;
+    const p2 = wall.endPointIndex;
+    return !room.walls.some(
+      (w) => w.id !== wallId && w.isPinned &&
+        (w.startPointIndex === p1 || w.endPointIndex === p1 ||
+         w.startPointIndex === p2 || w.endPointIndex === p2)
+    );
+  };
+
+  const handleWallPointerDown = (wallId: string, e: React.PointerEvent) => {
+    // If not draggable (pinned), just select
+    if (!isWallDraggable(wallId)) {
+      setSelectedCornerIdx(null);
+      toggleWallSelection(wallId, e.shiftKey); // also sets selectedItemId: null
+      return;
+    }
+
+    // Start tracking for a potential wall drag
+    const wall = room.walls.find((w) => w.id === wallId)!;
+    const aCm = room.points[wall.startPointIndex];
+    const bCm = room.points[wall.endPointIndex];
+    const wLen = Math.hypot(bCm.x - aCm.x, bCm.y - aCm.y);
+    if (wLen < 1) {
+      toggleWallSelection(wallId, e.shiftKey);
+      return;
+    }
+    const ux = (bCm.x - aCm.x) / wLen;
+    const uy = (bCm.y - aCm.y) / wLen;
+    // Wall normal (perpendicular) = (-uy, ux)
+    wallDragRef.current = {
+      wallId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      nx: -uy,
+      ny: ux,
+      lastT: 0,
+      isDragging: false,
+    };
+
+    const shiftKey = e.shiftKey;
+
+    const onMove = (ev: PointerEvent) => {
+      const drag = wallDragRef.current;
+      if (!drag) return;
+
+      const { canvas } = usePlanStore.getState();
+      const dClientX = ev.clientX - drag.startClientX;
+      const dClientY = ev.clientY - drag.startClientY;
+
+      if (!drag.isDragging) {
+        if (Math.hypot(dClientX, dClientY) < WALL_DRAG_THRESHOLD_PX) return;
+        drag.isDragging = true;
+        // Clear wall/item selection when drag starts
+        setSelectedCornerIdx(null);
+        setSelectedItemId(null);
+      }
+
+      // Project drag onto wall normal, convert from screen px to cm
+      const dCmX = pxToCm(dClientX / canvas.zoom);
+      const dCmY = pxToCm(dClientY / canvas.zoom);
+      const newT = dCmX * drag.nx + dCmY * drag.ny;
+
+      const incDeltaT = newT - drag.lastT;
+      drag.lastT = newT;
+
+      translateWall(drag.wallId, { x: incDeltaT * drag.nx, y: incDeltaT * drag.ny });
+    };
+
+    const onUp = () => {
+      const drag = wallDragRef.current;
+      wallDragRef.current = null;
+      globalThis.removeEventListener('pointermove', onMove);
+      globalThis.removeEventListener('pointerup', onUp);
+
+      if (!drag?.isDragging) {
+        // No drag occurred → treat as click (select wall)
+        // toggleWallSelection already sets selectedItemId: null
+        setSelectedCornerIdx(null);
+        toggleWallSelection(wallId, shiftKey);
+      }
+    };
+
+    globalThis.addEventListener('pointermove', onMove);
+    globalThis.addEventListener('pointerup', onUp);
   };
 
   // --- Corner pointer handlers ---
@@ -223,6 +327,31 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
     setSelectedCornerIdx(null);
   };
 
+  // --- Straighten popup (single wall selected) ---
+  const straightenWall = selectedWallIds.length === 1
+    ? room.walls.find((w) => w.id === selectedWallIds[0]) ?? null
+    : null;
+
+  const straightenData = straightenWall ? (() => {
+    const aCm = room.points[straightenWall.startPointIndex];
+    const bCm = room.points[straightenWall.endPointIndex];
+    const dx = bCm.x - aCm.x;
+    const dy = bCm.y - aCm.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return null;
+    // Closer to horizontal or vertical?
+    const direction: 'horizontal' | 'vertical' =
+      Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical';
+    const alreadyStraight =
+      direction === 'horizontal' ? Math.abs(dy) < 0.5 : Math.abs(dx) < 0.5;
+    if (alreadyStraight) return null;
+    // Position popup at wall midpoint, slightly offset outward
+    const midX = cmToPx((aCm.x + bCm.x) / 2);
+    const midY = cmToPx((aCm.y + bCm.y) / 2);
+    const nx = -dy / len, ny = dx / len; // outward normal
+    return { direction, wallId: straightenWall.id, midX, midY, nx, ny };
+  })() : null;
+
   const pointsStr = room.points
     .map((p) => `${cmToPx(p.x)},${cmToPx(p.y)}`)
     .join(' ');
@@ -237,8 +366,8 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
   return (
     <>
       <g>
-        {/* Room fill */}
-        <polygon points={pointsStr} fill="var(--color-surface)" stroke="none" />
+        {/* Room fill — uses --color-floor injected from Canvas */}
+        <polygon points={pointsStr} fill="var(--color-floor, var(--color-surface))" stroke="none" />
 
         {/* Walls with doors/windows */}
         {room.walls.map((wall) => {
@@ -259,7 +388,8 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
               onTogglePin={toggleWallPin}
               onSelectDoor={setSelectedItemId}
               onSelectWindow={setSelectedItemId}
-              onWallClick={handleWallClick}
+              onWallClick={handleWallPointerDown}
+              isDraggable={isWallDraggable(wall.id)}
             />
           );
         })}
@@ -311,8 +441,18 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
         {furnitureInstances.map((instance) => {
           const catalogItem = productMap.get(instance.catalogItemId);
           if (!catalogItem) return null;
-          return <FurnitureItem key={instance.id} instance={instance} catalogItem={catalogItem} />;
+          return <FurnitureItem key={instance.id} instance={instance} catalogItem={catalogItem} zoom={zoom} />;
         })}
+
+        {/* Structural columns */}
+        {(room.columns ?? []).map((col) => (
+          <ColumnItem key={col.id} column={col} room={room} zoom={zoom} />
+        ))}
+
+        {/* Custom parametric shapes */}
+        {(customShapeInstances ?? []).map((cs) => (
+          <CustomShapeItem key={cs.id} instance={cs} zoom={zoom} />
+        ))}
       </g>
 
       {/* Corner-tap angle lock popup
@@ -367,6 +507,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
               />
               <span style={{ fontSize: '12px', color: '#555' }}>°</span>
               <button
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={handleCornerLockBtn}
                 style={{
                   flex: 1,
@@ -385,6 +526,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
               </button>
               {cornerExistingConstraint && (
                 <button
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={handleCornerUnlockBtn}
                   style={{
                     fontFamily: 'var(--font-body)',
@@ -418,6 +560,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
         >
           <div style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'top left', width: '80px', height: '26px' }}>
             <button
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={handleLock90}
               style={{
                 fontFamily: 'var(--font-body)',
@@ -435,6 +578,44 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
               }}
             >
               Açıyı Kilitle
+            </button>
+          </div>
+        </foreignObject>
+      )}
+
+      {/* Straighten wall popup — shown when a single slightly-off wall is selected */}
+      {straightenData && (
+        <foreignObject
+          data-interactive="true"
+          x={straightenData.midX + (24 / zoom) * straightenData.nx}
+          y={straightenData.midY + (24 / zoom) * straightenData.ny - 13 / zoom}
+          width={70 / zoom}
+          height={26 / zoom}
+          style={{ overflow: 'visible', pointerEvents: 'auto' }}
+        >
+          <div style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'top left', width: '70px', height: '26px' }}>
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                snapWallStraight(straightenData.wallId, straightenData.direction);
+                clearWallSelection();
+              }}
+              style={{
+                fontFamily: 'var(--font-body)',
+                fontSize: '11px',
+                background: 'var(--color-accent, #f59e0b)',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '3px',
+                padding: '4px 8px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+                width: '70px',
+                height: '26px',
+              }}
+            >
+              {straightenData.direction === 'horizontal' ? 'Yatay' : 'Dikey'}
             </button>
           </div>
         </foreignObject>

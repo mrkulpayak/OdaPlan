@@ -6,9 +6,18 @@ import { useUiStore } from '../../store/uiStore';
 import { supabase } from '../../lib/supabase';
 import type { FurnitureShapeType, FurnitureFrontSide, FurnitureCategory } from '../../types';
 
+export interface AddProductPrefill {
+  name?: string;
+  widthCm?: number;
+  depthCm?: number;
+  shapeType?: FurnitureShapeType;
+  chamferCm?: number;
+}
+
 interface Props {
   dealerId: string;
   onClose: () => void;
+  prefill?: AddProductPrefill;
 }
 
 const SHAPE_TYPES: FurnitureShapeType[] = [
@@ -16,13 +25,13 @@ const SHAPE_TYPES: FurnitureShapeType[] = [
 ];
 
 const SHAPE_LABELS: Record<FurnitureShapeType, string> = {
-  rectangle: 'Rect',
-  square: 'Square',
-  circle: 'Circle',
-  semicircle: 'Semi',
-  quarterCircle: '¼ Arc',
-  chamferedRectangle: 'Chamfer',
-  cornerCabinet: 'Corner',
+  rectangle: 'Dikdörtgen',
+  square: 'Kare',
+  circle: 'Daire',
+  semicircle: 'Yarım Daire',
+  quarterCircle: '¼ Daire',
+  chamferedRectangle: 'Pahlı',
+  cornerCabinet: 'Köşe',
 };
 
 const CATEGORIES: FurnitureCategory[] = [
@@ -31,13 +40,15 @@ const CATEGORIES: FurnitureCategory[] = [
 ];
 
 const FRONT_SIDES: FurnitureFrontSide[] = ['top', 'right', 'bottom', 'left'];
+const FRONT_SIDE_LABELS: Record<string, string> = { top: 'Üst', right: 'Sağ', bottom: 'Alt', left: 'Sol' };
 const CORNERS = ['topLeft', 'topRight', 'bottomRight', 'bottomLeft'];
+const CORNER_LABELS: Record<string, string> = { topLeft: 'Sol Üst', topRight: 'Sağ Üst', bottomRight: 'Sağ Alt', bottomLeft: 'Sol Alt' };
 
 const fieldStyle: React.CSSProperties = { fontFamily: 'var(--font-body)', fontSize: '13px' };
 const labelCls = 'text-xs text-text-muted mb-1 block';
 const inputCls = 'w-full px-2 py-1.5 rounded border border-border bg-[var(--color-background)] text-[var(--color-text)] outline-none focus:border-primary text-sm';
 
-export function AddProductModal({ dealerId, onClose }: Props) {
+export function AddProductModal({ dealerId, onClose, prefill }: Props) {
   const { companies, models, addProduct, addCompany, addModel } = useCatalogStore();
   const addToast = useUiStore((s) => s.addToast);
 
@@ -45,13 +56,13 @@ export function AddProductModal({ dealerId, onClose }: Props) {
   const [newCompanyName, setNewCompanyName] = useState('');
   const [modelId, setModelId] = useState('');
   const [newModelName, setNewModelName] = useState('');
-  const [name, setName] = useState('');
+  const [name, setName] = useState(prefill?.name ?? '');
   const [category, setCategory] = useState<FurnitureCategory | ''>('');
-  const [shapeType, setShapeType] = useState<FurnitureShapeType>('rectangle');
+  const [shapeType, setShapeType] = useState<FurnitureShapeType>(prefill?.shapeType ?? 'rectangle');
   const [frontSide, setFrontSide] = useState<FurnitureFrontSide>('bottom');
-  const [widthCm, setWidthCm] = useState('');
-  const [depthCm, setDepthCm] = useState('');
-  const [chamferCm, setChamferCm] = useState('20');
+  const [widthCm, setWidthCm] = useState(prefill?.widthCm ? String(prefill.widthCm) : '');
+  const [depthCm, setDepthCm] = useState(prefill?.depthCm ? String(prefill.depthCm) : '');
+  const [chamferCm, setChamferCm] = useState(prefill?.chamferCm ? String(prefill.chamferCm) : '20');
   const [chamferCorner, setChamferCorner] = useState('topLeft');
   const [quarterCorner, setQuarterCorner] = useState('topLeft');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -64,11 +75,11 @@ export function AddProductModal({ dealerId, onClose }: Props) {
 
   const validate = () => {
     const e: Record<string, string> = {};
-    if (!companyId && !newCompanyName.trim()) e.company = 'Company is required.';
-    if (!name.trim()) e.name = 'Product name is required.';
-    if (!category) e.category = 'Category is required.';
-    if (!widthCm || Number(widthCm) <= 0) e.width = 'Valid width required.';
-    if (!depthCm || Number(depthCm) <= 0) e.depth = 'Valid depth required.';
+    if (!companyId && !newCompanyName.trim()) e.company = 'Firma zorunludur.';
+    if (!name.trim()) e.name = 'Ürün adı zorunludur.';
+    if (!category) e.category = 'Kategori zorunludur.';
+    if (!widthCm || Number(widthCm) <= 0) e.width = 'Geçerli bir genişlik giriniz.';
+    if (!depthCm || Number(depthCm) <= 0) e.depth = 'Geçerli bir derinlik giriniz.';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -88,7 +99,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
         .select()
         .single();
       if (error || !data) {
-        addToast({ type: 'error', message: 'Could not save. Check your connection.' });
+        addToast({ type: 'error', message: 'Kaydedilemedi. Bağlantınızı kontrol edin.' });
         setSaving(false);
         return;
       }
@@ -104,7 +115,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
         .select()
         .single();
       if (error || !data) {
-        addToast({ type: 'error', message: 'Could not save. Check your connection.' });
+        addToast({ type: 'error', message: 'Kaydedilemedi. Bağlantınızı kontrol edin.' });
         setSaving(false);
         return;
       }
@@ -156,7 +167,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
       isGlobal: false,
     });
 
-    addToast({ type: 'success', message: 'Product saved.' });
+    addToast({ type: 'success', message: 'Ürün kaydedildi.' });
     onClose();
   };
 
@@ -169,7 +180,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
 
   return (
     <Modal
-      title="Add New Product"
+      title="Yeni Ürün Ekle"
       onClose={onClose}
       footer={
         <>
@@ -178,7 +189,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
             className="px-4 py-1.5 rounded border border-border text-sm cursor-pointer hover:bg-surface-alt transition-colors duration-fast"
             style={fieldStyle}
           >
-            Cancel
+            İptal
           </button>
           <button
             onClick={handleSave}
@@ -186,7 +197,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
             className="px-4 py-1.5 rounded text-sm cursor-pointer transition-colors duration-fast"
             style={{ ...fieldStyle, background: 'var(--color-primary)', color: '#fff', opacity: saving ? 0.6 : 1 }}
           >
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? 'Kaydediliyor...' : 'Kaydet'}
           </button>
         </>
       }
@@ -195,13 +206,13 @@ export function AddProductModal({ dealerId, onClose }: Props) {
 
         {/* Company */}
         <div>
-          <label className={labelCls} style={fieldStyle}>Company *</label>
+          <label className={labelCls} style={fieldStyle}>Firma *</label>
           {newCompanyName.trim() ? (
             <div className="flex gap-2">
               <input
                 className={inputCls}
                 style={fieldStyle}
-                placeholder="New company name"
+                placeholder="Yeni firma adı"
                 value={newCompanyName}
                 onChange={(e) => setNewCompanyName(e.target.value)}
                 maxLength={200}
@@ -212,7 +223,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
                 className="text-xs text-text-muted hover:text-[var(--color-text)] cursor-pointer whitespace-nowrap"
                 style={fieldStyle}
               >
-                Cancel
+                İptal
               </button>
             </div>
           ) : (
@@ -225,9 +236,9 @@ export function AddProductModal({ dealerId, onClose }: Props) {
                 else { setCompanyId(e.target.value); setModelId(''); }
               }}
             >
-              <option value="">Select company...</option>
+              <option value="">Firma seçin...</option>
               {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              <option value="__new__">+ New Company</option>
+              <option value="__new__">+ Yeni Firma</option>
             </select>
           )}
           {err('company')}
@@ -236,13 +247,13 @@ export function AddProductModal({ dealerId, onClose }: Props) {
         {/* Model (optional) */}
         {(companyId || newCompanyName.trim()) && (
           <div>
-            <label className={labelCls} style={fieldStyle}>Model / Set (optional)</label>
+            <label className={labelCls} style={fieldStyle}>Model / Set (opsiyonel)</label>
             {newModelName.trim() ? (
               <div className="flex gap-2">
                 <input
                   className={inputCls}
                   style={fieldStyle}
-                  placeholder="New model name"
+                  placeholder="Yeni model adı"
                   value={newModelName}
                   onChange={(e) => setNewModelName(e.target.value)}
                   maxLength={200}
@@ -265,9 +276,9 @@ export function AddProductModal({ dealerId, onClose }: Props) {
                   else setModelId(e.target.value);
                 }}
               >
-                <option value="">No model</option>
+                <option value="">Model yok</option>
                 {companyModels.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                <option value="__new__">+ New Model</option>
+                <option value="__new__">+ Yeni Model</option>
               </select>
             )}
           </div>
@@ -275,7 +286,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
 
         {/* Product Name */}
         <div>
-          <label className={labelCls} style={fieldStyle}>Product Name *</label>
+          <label className={labelCls} style={fieldStyle}>Ürün Adı *</label>
           <input
             className={inputCls}
             style={fieldStyle}
@@ -289,14 +300,14 @@ export function AddProductModal({ dealerId, onClose }: Props) {
 
         {/* Category */}
         <div>
-          <label className={labelCls} style={fieldStyle}>Category *</label>
+          <label className={labelCls} style={fieldStyle}>Kategori *</label>
           <select
             className={inputCls}
             style={fieldStyle}
             value={category}
             onChange={(e) => setCategory(e.target.value as FurnitureCategory)}
           >
-            <option value="">Select category...</option>
+            <option value="">Kategori seçin...</option>
             {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
           {err('category')}
@@ -305,7 +316,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
         {/* Dimensions */}
         <div className="flex gap-3">
           <div className="flex-1">
-            <label className={labelCls} style={fieldStyle}>Width (cm) *</label>
+            <label className={labelCls} style={fieldStyle}>Genişlik (cm) *</label>
             <input
               type="number" min={1} max={9999}
               className={inputCls}
@@ -317,7 +328,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
             {err('width')}
           </div>
           <div className="flex-1">
-            <label className={labelCls} style={fieldStyle}>Depth (cm) *</label>
+            <label className={labelCls} style={fieldStyle}>Derinlik (cm) *</label>
             <input
               type="number" min={1} max={9999}
               className={inputCls}
@@ -332,7 +343,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
 
         {/* Shape type */}
         <div>
-          <label className={labelCls} style={fieldStyle}>Shape</label>
+          <label className={labelCls} style={fieldStyle}>Şekil</label>
           <div className="flex flex-wrap gap-1">
             {SHAPE_TYPES.map((st) => (
               <button
@@ -355,13 +366,13 @@ export function AddProductModal({ dealerId, onClose }: Props) {
           {shapeType === 'chamferedRectangle' && (
             <div className="flex gap-3 mt-2">
               <div className="flex-1">
-                <label className={labelCls} style={fieldStyle}>Chamfer size (cm)</label>
+                <label className={labelCls} style={fieldStyle}>Pah boyutu (cm)</label>
                 <input type="number" min={1} className={inputCls} style={{ ...fieldStyle, fontFamily: 'var(--font-mono)' }} value={chamferCm} onChange={(e) => setChamferCm(e.target.value)} />
               </div>
               <div className="flex-1">
-                <label className={labelCls} style={fieldStyle}>Corner</label>
+                <label className={labelCls} style={fieldStyle}>Köşe</label>
                 <select className={inputCls} style={fieldStyle} value={chamferCorner} onChange={(e) => setChamferCorner(e.target.value)}>
-                  {CORNERS.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {CORNERS.map((c) => <option key={c} value={c}>{CORNER_LABELS[c]}</option>)}
                 </select>
               </div>
             </div>
@@ -370,7 +381,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
             <div className="mt-2">
               <label className={labelCls} style={fieldStyle}>Corner</label>
               <select className={inputCls} style={fieldStyle} value={quarterCorner} onChange={(e) => setQuarterCorner(e.target.value)}>
-                {CORNERS.map((c) => <option key={c} value={c}>{c}</option>)}
+                {CORNERS.map((c) => <option key={c} value={c}>{CORNER_LABELS[c]}</option>)}
               </select>
             </div>
           )}
@@ -379,7 +390,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
         {/* Preview + front side */}
         {widthCm && depthCm && Number(widthCm) > 0 && Number(depthCm) > 0 && (
           <div>
-            <label className={labelCls} style={fieldStyle}>Front side</label>
+            <label className={labelCls} style={fieldStyle}>Ön yüz</label>
             <div className="flex gap-4 items-start">
               {/* Shape preview with clickable sides */}
               <div className="relative" style={{ width: 80, height: 80 }}>
@@ -419,7 +430,7 @@ export function AddProductModal({ dealerId, onClose }: Props) {
                 value={frontSide}
                 onChange={(e) => setFrontSide(e.target.value as FurnitureFrontSide)}
               >
-                {FRONT_SIDES.map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+                {FRONT_SIDES.map((s) => <option key={s} value={s}>{FRONT_SIDE_LABELS[s]}</option>)}
               </select>
             </div>
           </div>

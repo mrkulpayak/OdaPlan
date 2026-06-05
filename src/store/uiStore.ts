@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { ToastItem } from '../types';
 
-type ActiveSection = 'room' | 'doors-windows' | 'furniture' | 'favorites' | 'add-product' | null;
+type ActiveSection = 'room' | 'doors-windows' | 'furniture' | 'favorites' | 'custom-shapes' | 'add-product' | null;
 
 interface UiState {
   selectedItemId: string | null;
@@ -9,6 +9,8 @@ interface UiState {
   isDrawingMode: boolean;
   toasts: ToastItem[];
   selectedWallIds: string[];
+  /** When set, PlannerPage opens AddProductModal pre-filled with this custom shape's data */
+  saveCustomShapeId: string | null;
 }
 
 interface UiActions {
@@ -19,6 +21,7 @@ interface UiActions {
   removeToast: (id: string) => void;
   toggleWallSelection: (id: string, multiSelect: boolean) => void;
   clearWallSelection: () => void;
+  setSaveCustomShapeId: (id: string | null) => void;
 }
 
 export const useUiStore = create<UiState & UiActions>()((set) => ({
@@ -27,6 +30,7 @@ export const useUiStore = create<UiState & UiActions>()((set) => ({
   isDrawingMode: false,
   toasts: [],
   selectedWallIds: [],
+  saveCustomShapeId: null,
 
   setSelectedItemId: (id) => set({ selectedItemId: id, selectedWallIds: [] }),
   setActiveSection: (section) => set({ activeSection: section }),
@@ -61,4 +65,5 @@ export const useUiStore = create<UiState & UiActions>()((set) => ({
     }),
 
   clearWallSelection: () => set({ selectedWallIds: [] }),
+  setSaveCustomShapeId: (id) => set({ saveCustomShapeId: id }),
 }));

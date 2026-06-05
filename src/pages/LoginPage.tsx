@@ -15,7 +15,7 @@ export function LoginPage() {
     const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
 
     if (authError) {
-      setError('Invalid email or password.');
+      setError('Geçersiz e-posta veya şifre.');
     }
 
     setLoading(false);
@@ -41,7 +41,7 @@ export function LoginPage() {
               className="text-sm text-[var(--color-text)]"
               style={{ fontFamily: 'var(--font-body)' }}
             >
-              Email
+              E-posta
             </label>
             <input
               id="email"
@@ -61,7 +61,7 @@ export function LoginPage() {
               className="text-sm text-[var(--color-text)]"
               style={{ fontFamily: 'var(--font-body)' }}
             >
-              Password
+              Şifre
             </label>
             <input
               id="password"
@@ -87,7 +87,7 @@ export function LoginPage() {
             className="mt-2 bg-primary hover:bg-primary-hover text-white rounded px-4 py-2 text-base font-medium cursor-pointer transition-colors duration-fast disabled:opacity-60 disabled:cursor-not-allowed"
             style={{ fontFamily: 'var(--font-body)', minHeight: '36px' }}
           >
-            {loading ? 'Signing in...' : 'Sign In'}
+            {loading ? 'Giriş yapılıyor...' : 'Giriş Yap'}
           </button>
         </form>
       </div>

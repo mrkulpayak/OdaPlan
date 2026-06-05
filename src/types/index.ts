@@ -45,12 +45,25 @@ export interface Window {
   widthCm: number;
 }
 
+export interface Column {
+  id: string;
+  widthCm: number;
+  depthCm: number;
+  position: Point; // top-left of unrotated bounding box, cm
+  rotation: number; // degrees
+  snappedToWall?: {
+    wallId: string;
+    side: 'top' | 'right' | 'bottom' | 'left';
+  };
+}
+
 export interface Room {
   points: Point[];
   walls: Wall[];
   doors: Door[];
   windows: Window[];
   constraints: Constraint[];
+  columns: Column[];
 }
 
 export type FurnitureShapeType =
@@ -109,12 +122,39 @@ export interface CanvasState {
   panY: number;
   viewRotation: 0 | 90 | 180 | 270;
   showDimensionsOnExport: boolean;
+  /** Furniture fill color (hex) */
+  furnitureColor: string;
+  /** Floor/room fill color (hex) */
+  floorColor: string;
+  /** Show 50 cm grid overlay */
+  showGrid: boolean;
 }
+
+// ── Custom Shapes ──────────────────────────────────────────────────────────
+/** Parametric shape type for user-defined furniture outlines */
+export type CustomShapeType = 'rect' | 'l-shape' | 'chamfered';
+
+export interface CustomShapeInstance {
+  id: string;
+  shapeType: CustomShapeType;
+  /** Top-left of the bounding box in cm */
+  position: Point;
+  rotation: number; // degrees
+  /**
+   * rect:      { A: width, B: depth }
+   * l-shape:   { A: outerWidth, B: outerDepth, C: notchWidth, D: notchDepth }
+   * chamfered: { A: width, B: depth, C: chamfer }  (symmetric 45° corner)
+   */
+  dims: Record<string, number>;
+  name?: string; // optional user label (for future save)
+}
+// ── /Custom Shapes ─────────────────────────────────────────────────────────
 
 export interface PlanState {
   version: number;
   room: Room | null;
   furnitureInstances: FurnitureInstance[];
+  customShapeInstances: CustomShapeInstance[];
   canvas: CanvasState;
 }
 

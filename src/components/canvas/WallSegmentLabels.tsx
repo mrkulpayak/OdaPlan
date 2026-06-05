@@ -1,0 +1,285 @@
+import { useState } from 'react';
+import { cmToPx } from '../../lib/geometry';
+import { usePlanStore } from '../../store/planStore';
+import type { Column, Point } from '../../types';
+
+// ── Recompute top-left position so snapped face stays on wall after resize ────
+function adjustColPosForDimChange(col: Column, newWc: number, newDc: number): Point {
+  if (!col.snappedToWall) return col.position;
+  const { side } = col.snappedToWall;
+  const θ = (col.rotation * Math.PI) / 180;
+  const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
+  const cx = col.position.x + col.widthCm / 2;
+  const cy = col.position.y + col.depthCm / 2;
+  const [flx, fly] = side === 'top' ? [0, -col.depthCm / 2]
+    : side === 'bottom' ? [0, col.depthCm / 2]
+    : side === 'left' ? [-col.widthCm / 2, 0]
+    : [col.widthCm / 2, 0];
+  const faceMidX = cx + flx * cosθ - fly * sinθ;
+  const faceMidY = cy + flx * sinθ + fly * cosθ;
+  const [nflx, nfly] = side === 'top' ? [0, -newDc / 2]
+    : side === 'bottom' ? [0, newDc / 2]
+    : side === 'left' ? [-newWc / 2, 0]
+    : [newWc / 2, 0];
+  const newCx = faceMidX - (nflx * cosθ - nfly * sinθ);
+  const newCy = faceMidY - (nflx * sinθ + nfly * cosθ);
+  return { x: newCx - newWc / 2, y: newCy - newDc / 2 };
+}
+
+// ── Editable label (shared) ───────────────────────────────────────────────────
+interface EditableLblProps {
+  midX: number; midY: number;
+  distCm: number;
+  zoom: number;
+  onCommit: (d: number) => void;
+}
+function EditableLbl({ midX, midY, distCm, zoom, onCommit }: EditableLblProps) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState('');
+  const fs = Math.max(8, Math.min(10, 9 / zoom));
+
+  if (editing) {
+    return (
+      <foreignObject
+        data-interactive="true"
+        x={midX - 22 / zoom} y={midY - 9 / zoom}
+        width={44 / zoom} height={18 / zoom}
+        style={{ overflow: 'visible' }}
+      >
+        <div style={{
+          transform: `scale(${1 / zoom})`, transformOrigin: 'top left',
+          width: '44px', height: '18px',
+        }}>
+          <input
+            type="number" value={val} autoFocus
+            onChange={e => setVal(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { const n = parseFloat(val); if (!isNaN(n)) onCommit(n); setEditing(false); }
+              if (e.key === 'Escape') setEditing(false);
+            }}
+            onBlur={() => { const n = parseFloat(val); if (!isNaN(n)) onCommit(n); setEditing(false); }}
+            style={{
+              width: '100%', height: '100%',
+              fontSize: '10px', fontFamily: 'var(--font-mono)',
+              textAlign: 'center',
+              border: '1px solid var(--color-primary)',
+              borderRadius: '2px', outline: 'none', padding: '1px',
+              background: 'var(--color-surface)', boxSizing: 'border-box',
+            }}
+          />
+        </div>
+      </foreignObject>
+    );
+  }
+
+  return (
+    <text
+      data-interactive="true"
+      x={midX} y={midY}
+      textAnchor="middle" dominantBaseline="middle"
+      style={{
+        fontFamily: 'var(--font-mono)',
+        fontSize: `${fs}px`,
+        fill: 'var(--color-primary)',
+        cursor: 'text', userSelect: 'none',
+      }}
+      onClick={() => { setVal(String(Math.round(distCm))); setEditing(true); }}
+    >{Math.round(distCm)}</text>
+  );
+}
+
+// ── Segment data ──────────────────────────────────────────────────────────────
+interface Segment {
+  kind: 'gap' | 'door' | 'window' | 'column';
+  id?: string;
+  startCm: number;
+  endCm: number;
+  spanCm: number;
+}
+
+// ── Props ─────────────────────────────────────────────────────────────────────
+interface Props {
+  wallId: string;
+  wallStart: Point; // cm
+  wallEnd: Point;   // cm
+  zoom: number;
+}
+
+/**
+ * Shows all segment labels for a wall when any element on it is selected.
+ * Renders: [gap] [item] [gap] [item] [gap] ...
+ * All labels are editable: gaps move adjacent items, item spans change widthCm.
+ */
+export function WallSegmentLabels({ wallId, wallStart, wallEnd, zoom }: Props) {
+  const room = usePlanStore(s => s.room);
+  const { updateDoor, updateWindow, updateColumn } = usePlanStore.getState();
+
+  if (!room) return null;
+
+  const wdx = wallEnd.x - wallStart.x;
+  const wdy = wallEnd.y - wallStart.y;
+  const wallLen = Math.hypot(wdx, wdy);
+  if (wallLen < 1) return null;
+
+  const ux = wdx / wallLen;
+  const uy = wdy / wallLen;
+  const Ax = wallStart.x, Ay = wallStart.y;
+
+  // ── Collect all items on this wall ────────────────────────────────────────
+  const items: { id: string; kind: 'door' | 'window' | 'column'; startCm: number; endCm: number }[] = [];
+
+  for (const d of room.doors) {
+    if (d.wallId !== wallId) continue;
+    const ct = d.positionOnWall * wallLen;
+    items.push({ id: d.id, kind: 'door', startCm: ct - d.widthCm / 2, endCm: ct + d.widthCm / 2 });
+  }
+  for (const w of room.windows) {
+    if (w.wallId !== wallId) continue;
+    const ct = w.positionOnWall * wallLen;
+    items.push({ id: w.id, kind: 'window', startCm: ct - w.widthCm / 2, endCm: ct + w.widthCm / 2 });
+  }
+  for (const col of (room.columns ?? [])) {
+    if (!col.snappedToWall || col.snappedToWall.wallId !== wallId) continue;
+    const side = col.snappedToWall.side;
+    const cxCm = col.position.x + col.widthCm / 2;
+    const cyCm = col.position.y + col.depthCm / 2;
+    const halfW = (side === 'top' || side === 'bottom') ? col.widthCm / 2 : col.depthCm / 2;
+    const tAlong = (cxCm - Ax) * ux + (cyCm - Ay) * uy;
+    items.push({ id: col.id, kind: 'column', startCm: tAlong - halfW, endCm: tAlong + halfW });
+  }
+
+  items.sort((a, b) => a.startCm - b.startCm);
+
+  // ── Build segment list ────────────────────────────────────────────────────
+  const segments: Segment[] = [];
+  let prev = 0;
+  for (const item of items) {
+    const s = Math.max(0, item.startCm);
+    const e = Math.min(wallLen, item.endCm);
+    if (s > prev + 0.1) {
+      segments.push({ kind: 'gap', startCm: prev, endCm: s, spanCm: s - prev });
+    }
+    segments.push({ id: item.id, kind: item.kind, startCm: s, endCm: e, spanCm: e - s });
+    prev = e;
+  }
+  if (wallLen - prev > 0.1) {
+    segments.push({ kind: 'gap', startCm: prev, endCm: wallLen, spanCm: wallLen - prev });
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  const CM = cmToPx(1);
+  const OFF = 22 / zoom;
+  const px = uy, py = -ux; // outward perpendicular
+  const Apx = cmToPx(Ax), Apy = cmToPx(Ay);
+
+  return (
+    <g>
+      {segments.map((seg, i) => {
+        const midCm = (seg.startCm + seg.endCm) / 2;
+        const midX = Apx + midCm * ux * CM + OFF * px;
+        const midY = Apy + midCm * uy * CM + OFF * py;
+
+        const onCommit = (newVal: number) => {
+          if (newVal < 0) return;
+          const { room: cur } = usePlanStore.getState();
+          if (!cur) return;
+
+          if (seg.kind === 'door') {
+            if (newVal < 10) return;
+            updateDoor(seg.id!, { widthCm: newVal });
+
+          } else if (seg.kind === 'window') {
+            if (newVal < 10) return;
+            updateWindow(seg.id!, { widthCm: newVal });
+
+          } else if (seg.kind === 'column') {
+            const col = cur.columns?.find(c => c.id === seg.id);
+            if (!col?.snappedToWall) return;
+            const side = col.snappedToWall.side;
+            const isAlongWall = side === 'top' || side === 'bottom';
+            const newWc = isAlongWall ? Math.max(5, newVal) : col.widthCm;
+            const newDc = isAlongWall ? col.depthCm : Math.max(5, newVal);
+            updateColumn(seg.id!, {
+              widthCm: newWc,
+              depthCm: newDc,
+              position: adjustColPosForDimChange(col, newWc, newDc),
+            });
+
+          } else if (seg.kind === 'gap') {
+            // Prefer to move the right neighbor; if none, move the left neighbor
+            const nextSeg = segments[i + 1];
+            const prevSeg = segments[i - 1];
+
+            const moveItem = (itemId: string, kind: 'door' | 'window' | 'column', newStart: number) => {
+              const r = usePlanStore.getState().room;
+              if (!r) return;
+              if (kind === 'door') {
+                const d = r.doors.find(x => x.id === itemId);
+                if (!d) return;
+                const nc = newStart + d.widthCm / 2;
+                updateDoor(itemId, { positionOnWall: Math.max(0, Math.min(1, nc / wallLen)) });
+              } else if (kind === 'window') {
+                const w = r.windows.find(x => x.id === itemId);
+                if (!w) return;
+                const nc = newStart + w.widthCm / 2;
+                updateWindow(itemId, { positionOnWall: Math.max(0, Math.min(1, nc / wallLen)) });
+              } else if (kind === 'column') {
+                const col = r.columns?.find(c => c.id === itemId);
+                if (!col?.snappedToWall) return;
+                const side = col.snappedToWall.side;
+                const halfW = (side === 'top' || side === 'bottom') ? col.widthCm / 2 : col.depthCm / 2;
+                const cxCm = col.position.x + col.widthCm / 2;
+                const cyCm = col.position.y + col.depthCm / 2;
+                const currentT = (cxCm - Ax) * ux + (cyCm - Ay) * uy;
+                const newT = newStart + halfW;
+                const delta = { x: (newT - currentT) * ux, y: (newT - currentT) * uy };
+                updateColumn(itemId, { position: { x: col.position.x + delta.x, y: col.position.y + delta.y } });
+              }
+            };
+
+            if (nextSeg?.id && nextSeg.kind !== 'gap') {
+              moveItem(nextSeg.id, nextSeg.kind as 'door' | 'window' | 'column', newVal);
+            } else if (prevSeg?.id && prevSeg.kind !== 'gap') {
+              // Move prev item so its end = wallLen - newVal
+              const newEnd = wallLen - newVal;
+              const r = usePlanStore.getState().room;
+              if (!r) return;
+              if (prevSeg.kind === 'door') {
+                const d = r.doors.find(x => x.id === prevSeg.id);
+                if (!d) return;
+                const nc = newEnd - d.widthCm / 2;
+                updateDoor(prevSeg.id, { positionOnWall: Math.max(0, Math.min(1, nc / wallLen)) });
+              } else if (prevSeg.kind === 'window') {
+                const w = r.windows.find(x => x.id === prevSeg.id);
+                if (!w) return;
+                const nc = newEnd - w.widthCm / 2;
+                updateWindow(prevSeg.id, { positionOnWall: Math.max(0, Math.min(1, nc / wallLen)) });
+              } else if (prevSeg.kind === 'column') {
+                const col = r.columns?.find(c => c.id === prevSeg.id);
+                if (!col?.snappedToWall) return;
+                const side = col.snappedToWall.side;
+                const halfW = (side === 'top' || side === 'bottom') ? col.widthCm / 2 : col.depthCm / 2;
+                const cxCm = col.position.x + col.widthCm / 2;
+                const cyCm = col.position.y + col.depthCm / 2;
+                const currentT = (cxCm - Ax) * ux + (cyCm - Ay) * uy;
+                const newT = newEnd - halfW;
+                const delta = { x: (newT - currentT) * ux, y: (newT - currentT) * uy };
+                updateColumn(prevSeg.id, { position: { x: col.position.x + delta.x, y: col.position.y + delta.y } });
+              }
+            }
+          }
+        };
+
+        return (
+          <EditableLbl
+            key={`wseg-${wallId}-${i}`}
+            midX={midX} midY={midY}
+            distCm={seg.spanCm}
+            zoom={zoom}
+            onCommit={onCommit}
+          />
+        );
+      })}
+    </g>
+  );
+}

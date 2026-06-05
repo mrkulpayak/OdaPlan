@@ -1,6 +1,7 @@
-import { memo, useRef } from 'react';
+import { memo, useRef, useEffect } from 'react';
 import { cmToPx } from '../../lib/geometry';
 import { useUiStore } from '../../store/uiStore';
+import { usePlanStore } from '../../store/planStore';
 import { useDrag } from '../../hooks/useDrag';
 import { FurnitureShape } from './FurnitureShape';
 import { SelectionHandles } from './SelectionHandles';
@@ -11,11 +12,16 @@ const DRAG_THRESHOLD_PX = 4;
 interface Props {
   instance: FurnitureInstance;
   catalogItem: FurnitureCatalogItem;
+  zoom: number;
 }
 
-export const FurnitureItem = memo(function FurnitureItem({ instance, catalogItem }: Props) {
+export const FurnitureItem = memo(function FurnitureItem({ instance, catalogItem, zoom }: Props) {
   const selectedItemId = useUiStore((s) => s.selectedItemId);
   const setSelectedItemId = useUiStore((s) => s.setSelectedItemId);
+  const removeFurnitureInstance = usePlanStore((s) => s.removeFurnitureInstance);
+  const rotateFurniture = usePlanStore((s) => s.rotateFurniture);
+  const rotateFurnitureToAngle = usePlanStore((s) => s.rotateFurnitureToAngle);
+  const duplicateFurnitureInstance = usePlanStore((s) => s.duplicateFurnitureInstance);
   const { startMoveDrag } = useDrag();
 
   const isSelected = selectedItemId === instance.id;
@@ -28,10 +34,25 @@ export const FurnitureItem = memo(function FurnitureItem({ instance, catalogItem
   const w = cmToPx(catalogItem.widthCm);
   const d = cmToPx(catalogItem.depthCm);
 
+  // ── Keyboard delete (Backspace / Delete) ────────────────────────
+  useEffect(() => {
+    if (!isSelected) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Don't fire if user is typing in an input/textarea
+        const tag = (e.target as HTMLElement).tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        removeFurnitureInstance(instance.id);
+        setSelectedItemId(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isSelected, instance.id, removeFurnitureInstance, setSelectedItemId]);
+
   const handlePointerDown = (e: React.PointerEvent) => {
     e.stopPropagation();
     setSelectedItemId(instance.id);
-    // Capture pointer and record start for threshold drag detection
     e.currentTarget.setPointerCapture(e.pointerId);
     pendingDragRef.current = { x: e.clientX, y: e.clientY };
   };
@@ -78,7 +99,7 @@ export const FurnitureItem = memo(function FurnitureItem({ instance, catalogItem
       {isSelected && (
         <text
           x={w / 2}
-          y={-8}
+          y={-16}
           textAnchor="middle"
           style={{
             fontFamily: 'var(--font-body)',
@@ -93,10 +114,15 @@ export const FurnitureItem = memo(function FurnitureItem({ instance, catalogItem
 
       {isSelected && (
         <SelectionHandles
-          instanceId={instance.id}
           widthCm={catalogItem.widthCm}
           depthCm={catalogItem.depthCm}
+          rotation={instance.rotation}
+          zoom={zoom}
           onStartMoveDrag={handleStartMove}
+          onRotate90={() => rotateFurniture(instance.id)}
+          onRotateToAngle={(a) => rotateFurnitureToAngle(instance.id, a)}
+          onDelete={() => { removeFurnitureInstance(instance.id); setSelectedItemId(null); }}
+          onDuplicate={() => duplicateFurnitureInstance(instance.id)}
         />
       )}
     </g>

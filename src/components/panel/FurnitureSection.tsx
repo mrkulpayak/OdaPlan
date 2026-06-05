@@ -59,7 +59,7 @@ function CatalogRow({ item, dealerId }: { item: FurnitureCatalogItem; dealerId: 
         onClick={(e) => { e.stopPropagation(); toggleFavorite('product', item.id, dealerId); }}
         className="ml-2 cursor-pointer shrink-0"
         style={{ color: isFav ? 'var(--color-accent)' : 'var(--color-border)' }}
-        title={isFav ? 'Remove from favorites' : 'Add to favorites'}
+        title={isFav ? 'Favorilerden çıkar' : 'Favorilere ekle'}
       >
         <Star size={13} fill={isFav ? 'var(--color-accent)' : 'none'} />
       </button>
@@ -146,7 +146,7 @@ export const FurnitureSection = memo(function FurnitureSection({ dealerId }: { d
             type="text"
             value={searchQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
-            placeholder="Search products..."
+            placeholder="Ürün ara..."
             className="flex-1 bg-transparent text-sm text-[var(--color-text)] placeholder:text-text-muted outline-none"
             style={{ fontFamily: 'var(--font-body)' }}
           />
@@ -171,7 +171,7 @@ export const FurnitureSection = memo(function FurnitureSection({ dealerId }: { d
               borderColor: !selectedCompanyId ? 'var(--color-primary)' : 'var(--color-border)',
             }}
           >
-            All
+            Tümü
           </button>
           {sortedCompanies.map((c) => (
             <button
@@ -205,7 +205,7 @@ export const FurnitureSection = memo(function FurnitureSection({ dealerId }: { d
               borderColor: !selectedModelId ? 'var(--color-accent)' : 'var(--color-border)',
             }}
           >
-            All Models
+            Tümü Models
           </button>
           {filteredModels.map((m) => (
             <button

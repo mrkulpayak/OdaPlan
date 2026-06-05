@@ -202,6 +202,8 @@ export function computeSnap(
   if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
 
   // ── Priority 3: furniture-to-furniture snap ───────────────────────────────
+  // Use half the wall snap threshold so furniture-to-furniture is a tighter magnet.
+  const FURN_SNAP = SNAP_DISTANCE_CM / 2;
   for (const other of otherInstances) {
     const otherItem = otherItems.get(other.catalogItemId);
     if (!otherItem) continue;
@@ -218,13 +220,13 @@ export function computeSnap(
 
     for (const [mx, my, ox, oy, snappedPos] of checks) {
       const dist = Math.hypot(mx - ox, my - oy);
-      if (dist < SNAP_DISTANCE_CM && dist < bestDist) {
+      if (dist < FURN_SNAP && dist < bestDist) {
         bestDist   = dist;
         bestResult = { position: snappedPos, rotation: currentRotation, guideLines: [] };
       }
     }
   }
-  if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
+  if (bestResult && bestDist <= FURN_SNAP) return bestResult;
 
   // No snap — preserve current position and rotation
   return { position: pos, rotation: currentRotation, guideLines: [] };

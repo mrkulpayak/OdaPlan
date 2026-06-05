@@ -45,6 +45,15 @@ export const Canvas = memo(function Canvas() {
     onTouchMove,
   } = useCanvas();
 
+  // Attach wheel listener as non-passive so preventDefault() works
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const handler = (e: WheelEvent) => onWheel(e as unknown as React.WheelEvent<SVGSVGElement>);
+    svg.addEventListener('wheel', handler, { passive: false });
+    return () => svg.removeEventListener('wheel', handler);
+  }, [onWheel]);
+
   const { zoom, panX, panY, viewRotation } = canvas;
   const cx = svgSize.w / 2;
   const cy = svgSize.h / 2;
@@ -122,17 +131,48 @@ export const Canvas = memo(function Canvas() {
           display: 'block',
           touchAction: 'none',
           cursor: isDrawingMode ? 'crosshair' : 'default',
-        }}
+          // Inject per-plan color overrides as CSS custom properties
+          '--color-furniture-fill': canvas.furnitureColor,
+          '--color-floor': canvas.floorColor,
+        } as React.CSSProperties}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={isDrawingMode ? undefined : onPointerUpCanvas}
-        onWheel={onWheel}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
       >
+        {/* Grid pattern defined at SVG root (outside transforms so it works in all browsers) */}
+        {canvas.showGrid && (
+          <defs>
+            {/* 50 cm = 200 px in room-space. The rect below is inside the scale(zoom) group,
+                so patternUnits="userSpaceOnUse" expresses the tile in room-pixel units. */}
+            <pattern id="grid-50cm" x={panX % (200 * zoom)} y={panY % (200 * zoom)}
+              width={200 * zoom} height={200 * zoom}
+              patternUnits="userSpaceOnUse">
+              <path
+                d={`M ${200 * zoom} 0 L 0 0 0 ${200 * zoom}`}
+                fill="none"
+                stroke="rgba(0,0,0,0.18)"
+                strokeWidth="1"
+              />
+            </pattern>
+          </defs>
+        )}
+
         {/* Rotation around canvas center, then pan + zoom */}
         <g transform={`rotate(${viewRotation}, ${cx}, ${cy})`}>
           <g transform={`translate(${panX}, ${panY}) scale(${zoom})`}>
+
+            {/* ── 50 cm grid overlay (rect covers entire visible area in room-px space) ── */}
+            {canvas.showGrid && (
+              <rect
+                x={-panX / zoom - 2000} y={-panY / zoom - 2000}
+                width={svgSize.w / zoom + 4000} height={svgSize.h / zoom + 4000}
+                fill="url(#grid-50cm)"
+                style={{ pointerEvents: 'none' }}
+              />
+            )}
+
             {room && (
               <Room room={room} viewRotation={viewRotation} zoom={zoom} canvasRef={svgRef} />
             )}
@@ -197,7 +237,7 @@ export const Canvas = memo(function Canvas() {
               pointerEvents: 'none',
             }}
           >
-            Select a room template or draw your room to begin.
+            Başlamak için bir oda şablonu seçin veya özel oda çizin.
           </text>
         )}
 
@@ -214,8 +254,8 @@ export const Canvas = memo(function Canvas() {
             }}
           >
             {drawPoints.length < 3
-              ? `Click to place points (${drawPoints.length} placed)`
-              : 'Click near first point to close room — or keep adding points'}
+              ? `Nokta yerleştirmek için tıklayın (${drawPoints.length} nokta eklendi)`
+              : 'Odayı kapatmak için ilk noktaya tıklayın — veya nokta eklemeye devam edin'}
           </text>
         )}
 

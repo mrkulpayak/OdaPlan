@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { PlanState, Room, Wall, FurnitureInstance, CanvasState, Point, Door, Window } from '../types';
+import type { PlanState, Room, Wall, FurnitureInstance, CanvasState, Point, Door, Window, Column, CustomShapeInstance } from '../types';
 import { segmentLength, segmentAngleDegrees, cmToPx, faceMidpointOffset } from '../lib/geometry';
 import { useCatalogStore } from './catalogStore';
 
@@ -13,20 +13,33 @@ interface PlanActions {
   updateFurnitureInstance: (id: string, updates: Partial<FurnitureInstance>) => void;
   removeFurnitureInstance: (id: string) => void;
   rotateFurniture: (id: string) => void;
+  rotateFurnitureToAngle: (id: string, angleDeg: number) => void;
+  duplicateFurnitureInstance: (id: string) => void;
   addDoor: (door: Door) => void;
   updateDoor: (id: string, updates: Partial<Door>) => void;
   removeDoor: (id: string) => void;
   addWindow: (window: Window) => void;
   updateWindow: (id: string, updates: Partial<Window>) => void;
   removeWindow: (id: string) => void;
+  addColumn: (column: Column) => void;
+  updateColumn: (id: string, updates: Partial<Column>) => void;
+  removeColumn: (id: string) => void;
   createRoomFromPoints: (points: Point[]) => void;
   addAngleConstraint: (sharedPointIndex: number, angleDeg: number) => void;
   removeConstraint: (constraintId: string) => void;
   toggleWallPin: (wallId: string) => void;
+  translateWall: (wallId: string, delta: Point) => void;
+  snapWallStraight: (wallId: string, direction: 'horizontal' | 'vertical') => void;
   moveRoomPoint: (pointIndex: number, newPosCm: Point) => void;
   setCanvasState: (canvas: Partial<CanvasState>) => void;
   fitRoomToCanvas: (canvasWidth: number, canvasHeight: number) => void;
   resetPlan: () => void;
+  // Custom shapes
+  addCustomShapeInstance: (instance: CustomShapeInstance) => void;
+  updateCustomShapeInstance: (id: string, updates: Partial<CustomShapeInstance>) => void;
+  removeCustomShapeInstance: (id: string) => void;
+  rotateCustomShape: (id: string) => void;
+  duplicateCustomShapeInstance: (id: string) => void;
 }
 
 export type RoomTemplate = 'rectangle' | 'square' | 'l-shape' | 'niche' | 'column' | 'angled';
@@ -37,12 +50,16 @@ const defaultCanvas: CanvasState = {
   panY: 0,
   viewRotation: 0,
   showDimensionsOnExport: true,
+  furnitureColor: '#f5f0e8',
+  floorColor: '#e8dcc8',   // açık parke
+  showGrid: false,
 };
 
 const initialState: PlanState = {
   version: 1,
   room: null,
   furnitureInstances: [],
+  customShapeInstances: [],
   canvas: defaultCanvas,
 };
 
@@ -75,7 +92,7 @@ function buildRoom(points: Point[]): Room {
     isLengthLocked: false,
     isPinned: false,
   }));
-  return { points, walls, doors: [], windows: [], constraints: [] };
+  return { points, walls, doors: [], windows: [], constraints: [], columns: [] };
 }
 
 function templatePoints(type: RoomTemplate): Point[] {
@@ -108,6 +125,59 @@ function templatePoints(type: RoomTemplate): Point[] {
   }
 }
 
+/** True when every wall in the room is axis-aligned (horizontal or vertical). */
+function isOrthogonalRoom(points: Point[], walls: Wall[]): boolean {
+  const TOL = 2; // degrees
+  return walls.every((w) => {
+    const a = points[w.startPointIndex];
+    const b = points[w.endPointIndex];
+    const angRad = Math.atan2(b.y - a.y, b.x - a.x);
+    const angDeg = Math.abs((angRad * 180) / Math.PI) % 180;
+    return angDeg < TOL || Math.abs(angDeg - 90) < TOL || Math.abs(angDeg - 180) < TOL;
+  });
+}
+
+/**
+ * Starting from `startIdx`, traverse walls that are perpendicular to the
+ * movement axis and collect all endpoint indices that should move together.
+ *
+ * moveAxis: 'x' → wall being changed is horizontal, propagate via vertical walls
+ *           'y' → wall being changed is vertical,   propagate via horizontal walls
+ */
+function collectOrthogonalFollowers(
+  startIdx: number,
+  moveAxis: 'x' | 'y',
+  points: Point[],
+  walls: Wall[],
+  excludeWallId: string,
+): Set<number> {
+  const visited = new Set<number>([startIdx]);
+  const queue = [startIdx];
+  while (queue.length > 0) {
+    const idx = queue.shift()!;
+    const connected = walls.filter(
+      (w) => w.id !== excludeWallId &&
+        (w.startPointIndex === idx || w.endPointIndex === idx),
+    );
+    for (const w of connected) {
+      const a = points[w.startPointIndex];
+      const b = points[w.endPointIndex];
+      const dx = Math.abs(b.x - a.x);
+      const dy = Math.abs(b.y - a.y);
+      const wallIsHorizontal = dx >= dy;
+      // Traverse walls perpendicular to the movement axis
+      const isPerpendicular = moveAxis === 'x' ? !wallIsHorizontal : wallIsHorizontal;
+      if (!isPerpendicular) continue;
+      const farIdx = w.startPointIndex === idx ? w.endPointIndex : w.startPointIndex;
+      if (!visited.has(farIdx)) {
+        visited.add(farIdx);
+        queue.push(farIdx);
+      }
+    }
+  }
+  return visited;
+}
+
 export const usePlanStore = create<PlanState & PlanActions>()(
   persist(
     (set, get) => ({
@@ -121,6 +191,7 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         set((s) => ({
           room,
           furnitureInstances: [],
+          customShapeInstances: [],
           canvas: { ...s.canvas, viewRotation: 0 },
         }));
       },
@@ -145,10 +216,33 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         if (currentLen === 0) return { blocked: false };
 
         const angle = (segmentAngleDegrees(a, b) * Math.PI) / 180;
-        points[wall.endPointIndex] = {
-          x: a.x + newLengthCm * Math.cos(angle),
-          y: a.y + newLengthCm * Math.sin(angle),
-        };
+        const newEndX = a.x + newLengthCm * Math.cos(angle);
+        const newEndY = a.y + newLengthCm * Math.sin(angle);
+        const dx = newEndX - b.x;
+        const dy = newEndY - b.y;
+
+        points[wall.endPointIndex] = { x: newEndX, y: newEndY };
+
+        // In a fully orthogonal room, propagate the endpoint shift to all
+        // points reachable via perpendicular walls — this keeps opposite
+        // parallel walls aligned and prevents diagonal distortion.
+        if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
+          const orthogonal = isOrthogonalRoom(state.room.points, state.room.walls);
+          if (orthogonal) {
+            const moveAxis: 'x' | 'y' = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+            const followers = collectOrthogonalFollowers(
+              wall.endPointIndex, moveAxis, state.room.points, state.room.walls, wallId,
+            );
+            followers.forEach((idx) => {
+              if (idx === wall.endPointIndex) return; // already set
+              if (moveAxis === 'x') {
+                points[idx] = { x: points[idx].x + dx, y: points[idx].y };
+              } else {
+                points[idx] = { x: points[idx].x, y: points[idx].y + dy };
+              }
+            });
+          }
+        }
 
         const newRoom = { ...state.room, points };
         const fit = computeFitTransform(points, canvasWidth, canvasHeight);
@@ -207,6 +301,25 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           }),
         })),
 
+      rotateFurnitureToAngle: (id, angleDeg) =>
+        set((s) => ({
+          furnitureInstances: s.furnitureInstances.map((fi) =>
+            fi.id === id ? { ...fi, rotation: ((angleDeg % 360) + 360) % 360 } : fi
+          ),
+        })),
+
+      duplicateFurnitureInstance: (id) => {
+        const state = get();
+        const instance = state.furnitureInstances.find((fi) => fi.id === id);
+        if (!instance) return;
+        const copy: FurnitureInstance = {
+          ...instance,
+          id: makeId(),
+          position: { x: instance.position.x + 20, y: instance.position.y + 20 },
+        };
+        set({ furnitureInstances: [...state.furnitureInstances, copy] });
+      },
+
       addDoor: (door) =>
         set((s) => {
           if (!s.room) return s;
@@ -241,6 +354,24 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         set((s) => {
           if (!s.room) return s;
           return { room: { ...s.room, windows: s.room.windows.filter((w) => w.id !== id) } };
+        }),
+
+      addColumn: (column) =>
+        set((s) => {
+          if (!s.room) return s;
+          return { room: { ...s.room, columns: [...(s.room.columns ?? []), column] } };
+        }),
+
+      updateColumn: (id, updates) =>
+        set((s) => {
+          if (!s.room) return s;
+          return { room: { ...s.room, columns: (s.room.columns ?? []).map((c) => c.id === id ? { ...c, ...updates } : c) } };
+        }),
+
+      removeColumn: (id) =>
+        set((s) => {
+          if (!s.room) return s;
+          return { room: { ...s.room, columns: (s.room.columns ?? []).filter((c) => c.id !== id) } };
         }),
 
       createRoomFromPoints: (points) => {
@@ -339,6 +470,202 @@ export const usePlanStore = create<PlanState & PlanActions>()(
             },
           };
         }),
+
+      translateWall: (wallId, delta) => {
+        const state = get();
+        if (!state.room) return;
+
+        const wall = state.room.walls.find((w) => w.id === wallId);
+        if (!wall || wall.isPinned) return;
+
+        const p1Idx = wall.startPointIndex;
+        const p2Idx = wall.endPointIndex;
+
+        // Block drag if any adjacent wall (sharing P1 or P2) is pinned
+        const pinnedAtP1 = state.room.walls.some(
+          (w) => w.id !== wallId && w.isPinned &&
+            (w.startPointIndex === p1Idx || w.endPointIndex === p1Idx)
+        );
+        const pinnedAtP2 = state.room.walls.some(
+          (w) => w.id !== wallId && w.isPinned &&
+            (w.startPointIndex === p2Idx || w.endPointIndex === p2Idx)
+        );
+        if (pinnedAtP1 || pinnedAtP2) return;
+
+        const P1 = state.room.points[p1Idx];
+        const P2 = state.room.points[p2Idx];
+
+        // Wall normal direction (delta is already perpendicular to wall)
+        const wLen = Math.hypot(P2.x - P1.x, P2.y - P1.y);
+        if (wLen < 1) return;
+        const ux = (P2.x - P1.x) / wLen;
+        const uy = (P2.y - P1.y) / wLen;
+        const nx = -uy, ny = ux;
+
+        // Scalar perpendicular displacement this increment
+        const t = delta.x * nx + delta.y * ny;
+
+        /**
+         * New position for a shared endpoint (sharedIdx) that preserves the
+         * angle of the connected wall at that corner.
+         *
+         * Strategy: find the ONE other wall at this point. Slide its far
+         * endpoint's ray (Q + r*(cx,cy)) to the position that has a normal
+         * displacement of t from the current point. Q stays fixed; only the
+         * shared point moves along the connected wall's direction.
+         *
+         * Derivation:
+         *   new_shared = Q + r*(cx,cy)
+         *   (new_shared - shared) · n = t
+         *   ⟹  (Q-shared)·n + r*(cx*nx+cy*ny) = t
+         *   ⟹  r = (t - (Q-shared)·n) / (cx*nx + cy*ny)
+         */
+        const slideAlongConnected = (sharedIdx: number): Point => {
+          const shared = state.room!.points[sharedIdx];
+          const connWall = state.room!.walls.find(
+            (w) => w.id !== wallId &&
+              (w.startPointIndex === sharedIdx || w.endPointIndex === sharedIdx)
+          );
+          if (!connWall) {
+            // Open polygon edge — simple translation fallback
+            return { x: shared.x + delta.x, y: shared.y + delta.y };
+          }
+          const farIdx = connWall.startPointIndex === sharedIdx
+            ? connWall.endPointIndex : connWall.startPointIndex;
+          const Q = state.room!.points[farIdx];
+
+          const cLen = Math.hypot(shared.x - Q.x, shared.y - Q.y);
+          if (cLen < 1) return { x: shared.x + delta.x, y: shared.y + delta.y };
+
+          // Unit vector from Q toward current shared point
+          const cx = (shared.x - Q.x) / cLen;
+          const cy = (shared.y - Q.y) / cLen;
+
+          const cDotN = cx * nx + cy * ny; // projection of connected-wall dir onto normal
+          if (Math.abs(cDotN) < 0.001) {
+            // Connected wall runs parallel to dragged wall — can't slide along it
+            return { x: shared.x + delta.x, y: shared.y + delta.y };
+          }
+
+          const qDotN = (Q.x - shared.x) * nx + (Q.y - shared.y) * ny;
+          const r = (t - qDotN) / cDotN;
+          return { x: Q.x + r * cx, y: Q.y + r * cy };
+        };
+
+        const newP1 = slideAlongConnected(p1Idx);
+        const newP2 = slideAlongConnected(p2Idx);
+
+        const newPoints = state.room.points.map((p, i) => {
+          if (i === p1Idx) return newP1;
+          if (i === p2Idx) return newP2;
+          return p;
+        });
+
+        // Move wall-snapped furniture and columns by the normal delta
+        // (wall angle unchanged, so along-wall positions remain valid)
+        const updatedInstances = state.furnitureInstances.map((fi) => {
+          if (fi.snappedTo?.wallId !== wallId) return fi;
+          return { ...fi, position: { x: fi.position.x + delta.x, y: fi.position.y + delta.y } };
+        });
+
+        const updatedColumns = (state.room.columns ?? []).map((col) => {
+          if (!col.snappedToWall || col.snappedToWall.wallId !== wallId) return col;
+          return { ...col, position: { x: col.position.x + delta.x, y: col.position.y + delta.y } };
+        });
+
+        set({
+          room: { ...state.room, points: newPoints, columns: updatedColumns },
+          furnitureInstances: updatedInstances,
+        });
+      },
+
+      snapWallStraight: (wallId, direction) => {
+        const state = get();
+        if (!state.room) return;
+
+        const wall = state.room.walls.find((w) => w.id === wallId);
+        if (!wall) return;
+
+        const p1Idx = wall.startPointIndex;
+        const p2Idx = wall.endPointIndex;
+        const P1 = state.room.points[p1Idx];
+        const P2 = state.room.points[p2Idx];
+
+        /** Far endpoint of the ONE other wall meeting at sharedIdx */
+        const getConnFar = (sharedIdx: number): { Q: Point } | null => {
+          const connWall = state.room!.walls.find(
+            (w) => w.id !== wallId &&
+              (w.startPointIndex === sharedIdx || w.endPointIndex === sharedIdx)
+          );
+          if (!connWall) return null;
+          const farIdx = connWall.startPointIndex === sharedIdx
+            ? connWall.endPointIndex : connWall.startPointIndex;
+          return { Q: state.room!.points[farIdx] };
+        };
+
+        /**
+         * Interior angle (degrees) at sharedIdx between the dragged wall
+         * and the single connected wall.
+         */
+        const cornerAngleDeg = (sharedIdx: number, otherEndIdx: number): number => {
+          const shared = state.room!.points[sharedIdx];
+          const otherEnd = state.room!.points[otherEndIdx];
+          const far = getConnFar(sharedIdx);
+          if (!far) return 90;
+          const ax = otherEnd.x - shared.x, ay = otherEnd.y - shared.y;
+          const bx = far.Q.x - shared.x,   by = far.Q.y - shared.y;
+          const aLen = Math.hypot(ax, ay),  bLen = Math.hypot(bx, by);
+          if (aLen < 1 || bLen < 1) return 90;
+          const dot = Math.max(-1, Math.min(1, (ax * bx + ay * by) / (aLen * bLen)));
+          return Math.acos(dot) * 180 / Math.PI;
+        };
+
+        const angle1 = cornerAngleDeg(p1Idx, p2Idx);
+        const angle2 = cornerAngleDeg(p2Idx, p1Idx);
+
+        // Pivot = corner whose interior angle is closest to 90°
+        const pivotIdx = Math.abs(angle1 - 90) <= Math.abs(angle2 - 90) ? p1Idx : p2Idx;
+        const moveIdx  = pivotIdx === p1Idx ? p2Idx : p1Idx;
+
+        const pivot  = state.room.points[pivotIdx];
+        const movePt = state.room.points[moveIdx];
+
+        // Connected wall at the moving end: Q stays fixed, movePt slides along (cx,cy)
+        const connFar = getConnFar(moveIdx);
+        if (!connFar) return;
+        const Q = connFar.Q;
+
+        const cLen = Math.hypot(movePt.x - Q.x, movePt.y - Q.y);
+        if (cLen < 1) return;
+        const cx = (movePt.x - Q.x) / cLen;
+        const cy = (movePt.y - Q.y) / cLen;
+
+        let newMovePt: Point;
+
+        if (direction === 'horizontal') {
+          if (Math.abs(cy) < 0.001) {
+            // Connected wall also horizontal → can't slide along it; shift y directly
+            newMovePt = { x: movePt.x, y: pivot.y };
+          } else {
+            const r = (pivot.y - Q.y) / cy;
+            newMovePt = { x: Q.x + r * cx, y: pivot.y };
+          }
+        } else {
+          if (Math.abs(cx) < 0.001) {
+            // Connected wall also vertical → can't slide along it; shift x directly
+            newMovePt = { x: pivot.x, y: movePt.y };
+          } else {
+            const r = (pivot.x - Q.x) / cx;
+            newMovePt = { x: pivot.x, y: Q.y + r * cy };
+          }
+        }
+
+        const newPoints = state.room.points.map((p, i) =>
+          i === moveIdx ? newMovePt : p
+        );
+
+        set({ room: { ...state.room, points: newPoints } });
+      },
 
       moveRoomPoint: (pointIndex, newPosCm) => {
         const state = get();
@@ -553,8 +880,82 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           return { ...fi, position: newPos, rotation: newRotation };
         });
 
+        // --- Move wall-snapped columns with the wall (same logic as furniture) ---
+        const updatedColumns = (state.room.columns ?? []).map((col) => {
+          if (!col.snappedToWall) return col;
+          const wall = state.room!.walls.find((w) => w.id === col.snappedToWall!.wallId);
+          if (!wall) return col;
+          if (wall.startPointIndex !== pointIndex && wall.endPointIndex !== pointIndex) return col;
+
+          const side = col.snappedToWall!.side;
+
+          const oldA = state.room!.points[wall.startPointIndex];
+          const oldB = state.room!.points[wall.endPointIndex];
+          const oldLen = Math.hypot(oldB.x - oldA.x, oldB.y - oldA.y);
+          if (oldLen < 1) return col;
+          const oldUx = (oldB.x - oldA.x) / oldLen;
+          const oldUy = (oldB.y - oldA.y) / oldLen;
+
+          const newA = newPoints[wall.startPointIndex];
+          const newB = newPoints[wall.endPointIndex];
+          const newLen = Math.hypot(newB.x - newA.x, newB.y - newA.y);
+          if (newLen < 1) return col;
+          const newUx = (newB.x - newA.x) / newLen;
+          const newUy = (newB.y - newA.y) / newLen;
+
+          // Rotation follows wall angle delta
+          const oldWallAngle = Math.atan2(oldUy, oldUx) * (180 / Math.PI);
+          const newWallAngle = Math.atan2(newUy, newUx) * (180 / Math.PI);
+          const angleDelta  = newWallAngle - oldWallAngle;
+          const newRotation = ((col.rotation + angleDelta) % 360 + 360) % 360;
+
+          // Face midpoint of the snapped face in world space (old rotation)
+          const colCx = col.position.x + col.widthCm / 2;
+          const colCy = col.position.y + col.depthCm / 2;
+          const θ = (col.rotation * Math.PI) / 180;
+          const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
+          let localFx = 0, localFy = 0;
+          if (side === 'top')    { localFy = -col.depthCm / 2; }
+          if (side === 'bottom') { localFy =  col.depthCm / 2; }
+          if (side === 'left')   { localFx = -col.widthCm / 2; }
+          if (side === 'right')  { localFx =  col.widthCm / 2; }
+          const fmX = colCx + localFx * cosθ - localFy * sinθ;
+          const fmY = colCy + localFx * sinθ + localFy * cosθ;
+
+          // Fixed (non-dragged) wall endpoint and directions
+          const fixedIsStart = (pointIndex === wall.endPointIndex);
+          const fixedPt = fixedIsStart ? oldA : oldB;
+          const oldFdx = fixedIsStart ? oldUx : -oldUx;
+          const oldFdy = fixedIsStart ? oldUy : -oldUy;
+          const newFdx = fixedIsStart ? newUx : -newUx;
+          const newFdy = fixedIsStart ? newUy : -newUy;
+
+          // Along-wall distance from fixed point to face midpoint
+          const tAlong = (fmX - fixedPt.x) * oldFdx + (fmY - fixedPt.y) * oldFdy;
+
+          // New face midpoint (on new wall)
+          const newFmX = fixedPt.x + tAlong * newFdx;
+          const newFmY = fixedPt.y + tAlong * newFdy;
+
+          // Face offset at new rotation
+          const newθ = (newRotation * Math.PI) / 180;
+          const newCosθ = Math.cos(newθ), newSinθ = Math.sin(newθ);
+          const newOffX = localFx * newCosθ - localFy * newSinθ;
+          const newOffY = localFx * newSinθ + localFy * newCosθ;
+
+          // New column center
+          const newCx = newFmX - newOffX;
+          const newCy = newFmY - newOffY;
+
+          return {
+            ...col,
+            position: { x: newCx - col.widthCm / 2, y: newCy - col.depthCm / 2 },
+            rotation: newRotation,
+          };
+        });
+
         set({
-          room: { ...state.room, points: newPoints },
+          room: { ...state.room, points: newPoints, columns: updatedColumns },
           furnitureInstances: updatedInstances,
         });
       },
@@ -570,12 +971,51 @@ export const usePlanStore = create<PlanState & PlanActions>()(
       },
 
       resetPlan: () => set(initialState),
+
+      // ── Custom shapes ─────────────────────────────────────────────────
+      addCustomShapeInstance: (instance) =>
+        set((s) => ({ customShapeInstances: [...s.customShapeInstances, instance] })),
+
+      updateCustomShapeInstance: (id, updates) =>
+        set((s) => ({
+          customShapeInstances: s.customShapeInstances.map((cs) =>
+            cs.id === id ? { ...cs, ...updates } : cs
+          ),
+        })),
+
+      removeCustomShapeInstance: (id) =>
+        set((s) => ({
+          customShapeInstances: s.customShapeInstances.filter((cs) => cs.id !== id),
+        })),
+
+      rotateCustomShape: (id) =>
+        set((s) => ({
+          customShapeInstances: s.customShapeInstances.map((cs) =>
+            cs.id === id ? { ...cs, rotation: (cs.rotation + 90) % 360 } : cs
+          ),
+        })),
+
+      duplicateCustomShapeInstance: (id) => {
+        const state = get();
+        const instance = state.customShapeInstances.find((cs) => cs.id === id);
+        if (!instance) return;
+        const copy: CustomShapeInstance = {
+          ...instance,
+          id: makeId(),
+          position: { x: instance.position.x + 20, y: instance.position.y + 20 },
+        };
+        set({ customShapeInstances: [...state.customShapeInstances, copy] });
+      },
     }),
     {
       name: 'frp-plan-state',
       onRehydrateStorage: () => (state) => {
         if (!state || state.version !== 1) {
           return initialState;
+        }
+        // Merge missing canvas fields from defaultCanvas (handles old localStorage)
+        if (state.canvas) {
+          state.canvas = { ...defaultCanvas, ...state.canvas };
         }
       },
     }

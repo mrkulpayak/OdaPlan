@@ -12,6 +12,7 @@ interface Props {
 }
 
 const FILL = 'var(--color-furniture-fill)';
+const FILL_OPACITY = 0.82;
 const STROKE = 'var(--color-furniture-border)';
 const FRONT_STROKE = 'var(--color-furniture-border)';
 
@@ -110,5 +111,5 @@ export const FurnitureShape = memo(function FurnitureShape({ shapeType, widthCm,
     shape = <rect x={0} y={0} width={w} height={d} fill={FILL} stroke={STROKE} strokeWidth={1} />;
   }
 
-  return <g>{shape}</g>;
+  return <g fillOpacity={FILL_OPACITY}>{shape}</g>;
 });

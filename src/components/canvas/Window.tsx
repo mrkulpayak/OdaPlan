@@ -1,8 +1,31 @@
 import { memo } from 'react';
-import { cmToPx, pxToCm } from '../../lib/geometry';
+import { cmToPx, pxToCm, distancePointToSegment, segmentLength } from '../../lib/geometry';
 import { useUiStore } from '../../store/uiStore';
 import { usePlanStore } from '../../store/planStore';
 import type { Window as WindowType, Point } from '../../types';
+import { WallSegmentLabels } from './WallSegmentLabels';
+
+function findNearestWallForItem(cmX: number, cmY: number, halfWidthCm: number) {
+  const { room } = usePlanStore.getState();
+  if (!room) return null;
+  let best: { wallId: string; t: number; dist: number } | null = null;
+  for (const wall of room.walls) {
+    const a = room.points[wall.startPointIndex];
+    const b = room.points[wall.endPointIndex];
+    const len = segmentLength(a, b);
+    if (len === 0) continue;
+    const dist = distancePointToSegment({ x: cmX, y: cmY }, a, b);
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const minT = halfWidthCm / len;
+    const maxT = 1 - halfWidthCm / len;
+    const rawT = ((cmX - a.x) * dx + (cmY - a.y) * dy) / (len * len);
+    const t = Math.max(minT, Math.min(maxT, rawT));
+    if (!best || dist < best.dist) best = { wallId: wall.id, t, dist };
+  }
+  return best;
+}
+
+// ── Window component ──────────────────────────────────────────────────────────
 
 interface Props {
   window: WindowType;
@@ -32,24 +55,24 @@ export const WindowComp = memo(function WindowComp({ window, wallStart, wallEnd,
   const sx = cmToPx(wallStart.x);
   const sy = cmToPx(wallStart.y);
 
-  const s1x = sx + (centerT - halfWin) * ux * scale;
-  const s1y = sy + (centerT - halfWin) * uy * scale;
-  const s2x = sx + (centerT + halfWin) * ux * scale;
-  const s2y = sy + (centerT + halfWin) * uy * scale;
+  const winStartCm = centerT - halfWin;
+  const winEndCm   = centerT + halfWin;
 
-  // Triple line symbol: outer line (on wall), center line (3px offset inward), outer line
+  const s1x = sx + winStartCm * ux * scale;
+  const s1y = sy + winStartCm * uy * scale;
+  const s2x = sx + winEndCm   * ux * scale;
+  const s2y = sy + winEndCm   * uy * scale;
+
+  // Triple-line symbol offsets
   const offset = 3;
   const o1x = nx * offset;
   const o1y = ny * offset;
 
-  // Handle click/drag: select + drag along wall
   const handlePointerDown = (e: React.PointerEvent) => {
     e.stopPropagation();
     onSelect(window.id);
 
     const updateWindow = usePlanStore.getState().updateWindow;
-    const minT = halfWin / wallLen;
-    const maxT = 1 - halfWin / wallLen;
 
     const onMove = (ev: PointerEvent) => {
       const canvasSvg = document.querySelector('#canvas svg') as SVGSVGElement | null;
@@ -58,10 +81,8 @@ export const WindowComp = memo(function WindowComp({ window, wallStart, wallEnd,
       const r = canvasSvg.getBoundingClientRect();
       const cmX = pxToCm((ev.clientX - r.left - canvas.panX) / canvas.zoom);
       const cmY = pxToCm((ev.clientY - r.top - canvas.panY) / canvas.zoom);
-      const t = Math.max(minT, Math.min(maxT,
-        ((cmX - wallStart.x) * wdx + (cmY - wallStart.y) * wdy) / (wallLen * wallLen)
-      ));
-      updateWindow(window.id, { positionOnWall: t });
+      const nearest = findNearestWallForItem(cmX, cmY, halfWin);
+      if (nearest) updateWindow(window.id, { wallId: nearest.wallId, positionOnWall: nearest.t });
     };
 
     const onUp = () => {
@@ -73,12 +94,13 @@ export const WindowComp = memo(function WindowComp({ window, wallStart, wallEnd,
     globalThis.addEventListener('pointerup', onUp);
   };
 
+  const zoom = usePlanStore.getState().canvas.zoom;
+
   return (
     <g style={{ cursor: 'pointer' }}>
-      {/* Wide transparent hit area for easy selection and drag */}
+      {/* Wide transparent hit area */}
       <line
-        x1={s1x} y1={s1y}
-        x2={s2x} y2={s2y}
+        x1={s1x} y1={s1y} x2={s2x} y2={s2y}
         stroke="transparent"
         strokeWidth={20}
         onPointerDown={handlePointerDown}
@@ -93,6 +115,16 @@ export const WindowComp = memo(function WindowComp({ window, wallStart, wallEnd,
 
       {isSelected && (
         <line x1={s1x} y1={s1y} x2={s2x} y2={s2y} stroke="var(--color-primary)" strokeWidth={4} strokeOpacity={0.3} style={{ pointerEvents: 'none' }} />
+      )}
+
+      {/* All wall segment labels */}
+      {isSelected && (
+        <WallSegmentLabels
+          wallId={window.wallId}
+          wallStart={wallStart}
+          wallEnd={wallEnd}
+          zoom={zoom}
+        />
       )}
     </g>
   );

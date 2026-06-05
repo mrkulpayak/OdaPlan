@@ -30,17 +30,34 @@ function removeGhost() {
   }
 }
 
-function renderGhostContent(svg: SVGSVGElement, w: number, h: number) {
-  svg.innerHTML = `
-    <rect x="0" y="0" width="${w}" height="${h}"
-      fill="var(--color-furniture-fill)"
-      stroke="var(--color-primary)"
-      stroke-width="1.5"
-      stroke-dasharray="4 3"
-      rx="1"
-    />
-    <line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--color-furniture-border)" stroke-width="2.5" stroke-opacity="0.7"/>
-  `;
+function renderGhostContent(svg: SVGSVGElement, item: FurnitureCatalogItem, w: number, h: number) {
+  const fill = 'var(--color-furniture-fill)';
+  const stroke = 'var(--color-primary)';
+  const sw = '1.5';
+  const da = '4 3';
+  const op = '0.82';
+
+  let shape = '';
+  if (item.shapeType === 'circle') {
+    const r = Math.min(w, h) / 2;
+    shape = `<circle cx="${w/2}" cy="${h/2}" r="${r}" fill="${fill}" fill-opacity="${op}" stroke="${stroke}" stroke-width="${sw}" stroke-dasharray="${da}"/>`;
+  } else if (item.shapeType === 'semicircle') {
+    shape = `<path d="M 0 ${h} A ${w/2} ${h} 0 0 1 ${w} ${h} Z" fill="${fill}" fill-opacity="${op}" stroke="${stroke}" stroke-width="${sw}" stroke-dasharray="${da}"/>`;
+  } else if (item.shapeType === 'quarterCircle') {
+    shape = `<path d="M 0 0 L ${w} 0 A ${w} ${h} 0 0 0 0 ${h} Z" fill="${fill}" fill-opacity="${op}" stroke="${stroke}" stroke-width="${sw}" stroke-dasharray="${da}"/>`;
+  } else if (item.shapeType === 'chamferedRectangle') {
+    const rawC = (item.params?.chamferCm as number) ?? 20;
+    const scale = w / (item.widthCm * 4);
+    const c = Math.min(rawC * scale * 4, w * 0.4, h * 0.4);
+    shape = `<path d="M ${c} 0 L ${w-c} 0 L ${w} ${c} L ${w} ${h-c} L ${w-c} ${h} L ${c} ${h} L 0 ${h-c} L 0 ${c} Z" fill="${fill}" fill-opacity="${op}" stroke="${stroke}" stroke-width="${sw}" stroke-dasharray="${da}"/>`;
+  } else if (item.shapeType === 'cornerCabinet') {
+    shape = `<path d="M 0 0 L ${w} 0 L 0 ${h} Z" fill="${fill}" fill-opacity="${op}" stroke="${stroke}" stroke-width="${sw}" stroke-dasharray="${da}"/>`;
+  } else {
+    // rectangle, square, default
+    shape = `<rect x="0" y="0" width="${w}" height="${h}" fill="${fill}" fill-opacity="${op}" stroke="${stroke}" stroke-width="${sw}" stroke-dasharray="${da}" rx="1"/>`;
+  }
+  const frontLine = `<line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--color-furniture-border)" stroke-width="2.5" stroke-opacity="0.7"/>`;
+  svg.innerHTML = shape + frontLine;
 }
 
 /**
@@ -68,7 +85,7 @@ function updateGhost(
   svg.style.top  = `${centerScreenY - h / 2}px`;
   // Apply rotation via CSS around the element's center (transform-origin: center)
   svg.style.transform = rotation ? `rotate(${rotation}deg)` : 'none';
-  renderGhostContent(svg, w, h);
+  renderGhostContent(svg, item, w, h);
 }
 
 /** Convert furniture position (top-left cm) + dimensions → screen center coords */

@@ -6,12 +6,12 @@ import { PenLine } from 'lucide-react';
 const templates: { type: RoomTemplate; label: string; path: string }[] = [
   {
     type: 'rectangle',
-    label: 'Rectangle',
+    label: 'Dikdörtgen',
     path: 'M2,2 L38,2 L38,28 L2,28 Z',
   },
   {
     type: 'square',
-    label: 'Square',
+    label: 'Kare',
     path: 'M5,2 L35,2 L35,28 L5,28 Z',
   },
   {
@@ -21,17 +21,17 @@ const templates: { type: RoomTemplate; label: string; path: string }[] = [
   },
   {
     type: 'niche',
-    label: 'With Niche',
+    label: 'Girintili',
     path: 'M2,2 L38,2 L38,28 L26,28 L26,18 L14,18 L14,28 L2,28 Z',
   },
   {
     type: 'column',
-    label: 'With Column',
+    label: 'Kolonlu',
     path: 'M2,2 L38,2 L38,28 L2,28 Z',
   },
   {
     type: 'angled',
-    label: 'Angled Wall',
+    label: 'Köşeli Duvar',
     path: 'M2,2 L32,2 L38,10 L38,28 L2,28 Z',
   },
 ];
@@ -63,7 +63,7 @@ export const RoomSection = memo(function RoomSection() {
   return (
     <div className="p-3">
       <p className="text-xs text-text-muted mb-2" style={{ fontFamily: 'var(--font-body)' }}>
-        Select a template to start
+        Başlamak için bir şablon seçin
       </p>
       <button
         onClick={() => setDrawingMode(!isDrawingMode)}
@@ -77,7 +77,7 @@ export const RoomSection = memo(function RoomSection() {
         }}
       >
         <PenLine size={14} />
-        {isDrawingMode ? 'Cancel drawing' : 'Draw custom room'}
+        {isDrawingMode ? 'Çizimi iptal et' : 'Özel oda çiz'}
       </button>
       <div className="grid grid-cols-2 gap-2">
         {templates.map((t) => (
