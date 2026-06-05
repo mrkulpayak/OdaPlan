@@ -16,6 +16,8 @@ function getOrCreateGhost(): SVGSVGElement {
     ghostEl.style.pointerEvents = 'none';
     ghostEl.style.zIndex = '9999';
     ghostEl.style.opacity = '0.7';
+    // CSS rotation will be applied per-update
+    ghostEl.style.transformOrigin = 'center';
     document.body.appendChild(ghostEl);
   }
   return ghostEl;
@@ -41,35 +43,48 @@ function renderGhostContent(svg: SVGSVGElement, w: number, h: number) {
   `;
 }
 
-// Show ghost centered at cursor (for catalog drag from panel)
-function updateGhostCentered(clientX: number, clientY: number, item: FurnitureCatalogItem, zoom: number) {
+/**
+ * Update ghost SVG position and rotation.
+ * @param centerScreenX - Screen X of the furniture's VISUAL CENTER
+ * @param centerScreenY - Screen Y of the furniture's VISUAL CENTER
+ * @param item - Catalog item (for dimensions)
+ * @param zoom - Current canvas zoom
+ * @param rotation - Rotation in degrees (applied via CSS)
+ */
+function updateGhost(
+  centerScreenX: number,
+  centerScreenY: number,
+  item: FurnitureCatalogItem,
+  zoom: number,
+  rotation: number
+) {
   const svg = getOrCreateGhost();
   const w = cmToPx(item.widthCm) * zoom;
   const h = cmToPx(item.depthCm) * zoom;
   svg.setAttribute('width', String(w));
   svg.setAttribute('height', String(h));
-  svg.style.left = `${clientX - w / 2}px`;
-  svg.style.top = `${clientY - h / 2}px`;
+  // Position top-left so the center lands at (centerScreenX, centerScreenY)
+  svg.style.left = `${centerScreenX - w / 2}px`;
+  svg.style.top  = `${centerScreenY - h / 2}px`;
+  // Apply rotation via CSS around the element's center (transform-origin: center)
+  svg.style.transform = rotation ? `rotate(${rotation}deg)` : 'none';
   renderGhostContent(svg, w, h);
 }
 
-// Show ghost with top-left at a specific screen position (for move drag — shows exact placement)
-function updateGhostAtPosition(topLeftScreenX: number, topLeftScreenY: number, item: FurnitureCatalogItem, zoom: number) {
-  const svg = getOrCreateGhost();
-  const w = cmToPx(item.widthCm) * zoom;
-  const h = cmToPx(item.depthCm) * zoom;
-  svg.setAttribute('width', String(w));
-  svg.setAttribute('height', String(h));
-  svg.style.left = `${topLeftScreenX}px`;
-  svg.style.top = `${topLeftScreenY}px`;
-  renderGhostContent(svg, w, h);
-}
-
-// Convert cm position to screen top-left coordinates for the ghost
-function cmToScreen(cmX: number, cmY: number, canvasRect: DOMRect, panX: number, panY: number, zoom: number) {
+/** Convert furniture position (top-left cm) + dimensions → screen center coords */
+function cmPosToScreenCenter(
+  posX: number,
+  posY: number,
+  w: number,
+  d: number,
+  canvasRect: DOMRect,
+  panX: number,
+  panY: number,
+  zoom: number
+) {
   return {
-    x: canvasRect.left + cmToPx(cmX) * zoom + panX,
-    y: canvasRect.top + cmToPx(cmY) * zoom + panY,
+    x: canvasRect.left + cmToPx(posX + w / 2) * zoom + panX,
+    y: canvasRect.top  + cmToPx(posY + d / 2) * zoom + panY,
   };
 }
 
@@ -121,12 +136,12 @@ export function useDrag() {
   const planStore = usePlanStore;
   const setSelectedItemId = useUiStore((s) => s.setSelectedItemId);
 
-  // dragOffset: offset from pointer to furniture top-left, in cm
   const dragState = useRef<{
     item: FurnitureCatalogItem;
     instanceId?: string;
     mode: 'catalog' | 'move';
     dragOffset: { x: number; y: number };
+    rotation: number; // current rotation of the dragged furniture (preserved throughout drag)
   } | null>(null);
 
   const startDrag = useCallback((e: React.PointerEvent, item: FurnitureCatalogItem) => {
@@ -135,9 +150,14 @@ export function useDrag() {
       item,
       mode: 'catalog',
       dragOffset: { x: item.widthCm / 2, y: item.depthCm / 2 },
+      rotation: 0,
     };
     const { canvas } = planStore.getState();
-    updateGhostCentered(e.clientX, e.clientY, item, canvas.zoom);
+    const cvInfo = getCanvasSvgAndRect();
+    if (cvInfo) {
+      // Show ghost centered at cursor
+      updateGhost(e.clientX, e.clientY, item, canvas.zoom, 0);
+    }
   }, [planStore]);
 
   const startMoveDrag = useCallback((e: React.PointerEvent, instance: FurnitureInstance, item: FurnitureCatalogItem) => {
@@ -146,7 +166,7 @@ export function useDrag() {
     const cvInfo = getCanvasSvgAndRect();
     const { canvas } = planStore.getState();
 
-    // Compute offset: where pointer is within the furniture (in cm)
+    // Compute dragOffset: where the pointer is within the furniture (in cm)
     let dragOffset = { x: item.widthCm / 2, y: item.depthCm / 2 };
     if (cvInfo) {
       const cmX = pxToCm((e.clientX - cvInfo.r.left - canvas.panX) / canvas.zoom);
@@ -154,14 +174,22 @@ export function useDrag() {
       dragOffset = { x: cmX - instance.position.x, y: cmY - instance.position.y };
     }
 
-    dragState.current = { item, instanceId: instance.id, mode: 'move', dragOffset };
+    dragState.current = {
+      item,
+      instanceId: instance.id,
+      mode: 'move',
+      dragOffset,
+      rotation: instance.rotation, // preserve existing rotation
+    };
 
-    // Show ghost at the furniture's CURRENT position on screen
+    // Show ghost at the furniture's CURRENT visual center
     if (cvInfo) {
-      const screen = cmToScreen(instance.position.x, instance.position.y, cvInfo.r, canvas.panX, canvas.panY, canvas.zoom);
-      updateGhostAtPosition(screen.x, screen.y, item, canvas.zoom);
-    } else {
-      updateGhostCentered(e.clientX, e.clientY, item, canvas.zoom);
+      const screen = cmPosToScreenCenter(
+        instance.position.x, instance.position.y,
+        item.widthCm, item.depthCm,
+        cvInfo.r, canvas.panX, canvas.panY, canvas.zoom
+      );
+      updateGhost(screen.x, screen.y, item, canvas.zoom, instance.rotation);
     }
   }, [planStore]);
 
@@ -178,7 +206,7 @@ export function useDrag() {
     const cmY = pxToCm((e.clientY - r.top - canvas.panY) / canvas.zoom);
 
     const item = dragState.current.item;
-    const { dragOffset } = dragState.current;
+    const { dragOffset, rotation } = dragState.current;
     const pos = { x: cmX - dragOffset.x, y: cmY - dragOffset.y };
 
     const otherInstances = dragState.current.instanceId
@@ -188,17 +216,17 @@ export function useDrag() {
     const { products } = useCatalogStore.getState();
     const itemMap = new Map(products.map((p) => [p.id, p]));
 
-    const snap = computeSnap(pos, item, room, otherInstances, itemMap);
+    // Pass the current rotation so snap preserves it and measures distances from rotated edges
+    const snap = computeSnap(pos, item, room, otherInstances, itemMap, rotation);
     updateSnapGuides(snap.guideLines, canvas.panX, canvas.panY, canvas.zoom);
 
-    // Show ghost at the ACTUAL snapped position so user sees exactly where furniture will land
-    const screen = cmToScreen(snap.position.x, snap.position.y, r, canvas.panX, canvas.panY, canvas.zoom);
-    if (dragState.current.mode === 'move') {
-      updateGhostAtPosition(screen.x, screen.y, item, canvas.zoom);
-    } else {
-      // Catalog drag: center ghost at cursor
-      updateGhostCentered(e.clientX, e.clientY, item, canvas.zoom);
-    }
+    // Show ghost at the SNAPPED position (visual center), with the rotation applied
+    const screenCenter = cmPosToScreenCenter(
+      snap.position.x, snap.position.y,
+      item.widthCm, item.depthCm,
+      r, canvas.panX, canvas.panY, canvas.zoom
+    );
+    updateGhost(screenCenter.x, screenCenter.y, item, canvas.zoom, snap.rotation);
   }, [planStore]);
 
   const onPointerUp = useCallback((e: PointerEvent) => {
@@ -221,7 +249,7 @@ export function useDrag() {
         const cmY = pxToCm((svgY - canvas.panY) / canvas.zoom);
 
         const item = dragState.current.item;
-        const { dragOffset } = dragState.current;
+        const { dragOffset, rotation } = dragState.current;
         const pos = { x: cmX - dragOffset.x, y: cmY - dragOffset.y };
 
         const otherInstances = dragState.current.instanceId
@@ -231,7 +259,7 @@ export function useDrag() {
         const { products } = useCatalogStore.getState();
         const itemMap = new Map(products.map((p) => [p.id, p]));
 
-        const snap = computeSnap(pos, item, room, otherInstances, itemMap);
+        const snap = computeSnap(pos, item, room, otherInstances, itemMap, rotation);
 
         if (dragState.current.mode === 'catalog') {
           const id = crypto.randomUUID();
