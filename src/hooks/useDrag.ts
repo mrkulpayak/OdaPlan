@@ -8,6 +8,7 @@ import type { FurnitureCatalogItem, FurnitureInstance } from '../types';
 
 // Ghost element rendered as a floating SVG overlay during drag
 let ghostEl: SVGSVGElement | null = null;
+
 function getOrCreateGhost(): SVGSVGElement {
   if (!ghostEl) {
     ghostEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -27,15 +28,7 @@ function removeGhost() {
   }
 }
 
-function updateGhost(x: number, y: number, item: FurnitureCatalogItem, zoom: number) {
-  const svg = getOrCreateGhost();
-  const w = cmToPx(item.widthCm) * zoom;
-  const h = cmToPx(item.depthCm) * zoom;
-  svg.setAttribute('width', String(w));
-  svg.setAttribute('height', String(h));
-  svg.style.left = `${x - w / 2}px`;
-  svg.style.top = `${y - h / 2}px`;
-
+function renderGhostContent(svg: SVGSVGElement, w: number, h: number) {
   svg.innerHTML = `
     <rect x="0" y="0" width="${w}" height="${h}"
       fill="var(--color-furniture-fill)"
@@ -46,6 +39,38 @@ function updateGhost(x: number, y: number, item: FurnitureCatalogItem, zoom: num
     />
     <line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--color-furniture-border)" stroke-width="2.5" stroke-opacity="0.7"/>
   `;
+}
+
+// Show ghost centered at cursor (for catalog drag from panel)
+function updateGhostCentered(clientX: number, clientY: number, item: FurnitureCatalogItem, zoom: number) {
+  const svg = getOrCreateGhost();
+  const w = cmToPx(item.widthCm) * zoom;
+  const h = cmToPx(item.depthCm) * zoom;
+  svg.setAttribute('width', String(w));
+  svg.setAttribute('height', String(h));
+  svg.style.left = `${clientX - w / 2}px`;
+  svg.style.top = `${clientY - h / 2}px`;
+  renderGhostContent(svg, w, h);
+}
+
+// Show ghost with top-left at a specific screen position (for move drag — shows exact placement)
+function updateGhostAtPosition(topLeftScreenX: number, topLeftScreenY: number, item: FurnitureCatalogItem, zoom: number) {
+  const svg = getOrCreateGhost();
+  const w = cmToPx(item.widthCm) * zoom;
+  const h = cmToPx(item.depthCm) * zoom;
+  svg.setAttribute('width', String(w));
+  svg.setAttribute('height', String(h));
+  svg.style.left = `${topLeftScreenX}px`;
+  svg.style.top = `${topLeftScreenY}px`;
+  renderGhostContent(svg, w, h);
+}
+
+// Convert cm position to screen top-left coordinates for the ghost
+function cmToScreen(cmX: number, cmY: number, canvasRect: DOMRect, panX: number, panY: number, zoom: number) {
+  return {
+    x: canvasRect.left + cmToPx(cmX) * zoom + panX,
+    y: canvasRect.top + cmToPx(cmY) * zoom + panY,
+  };
 }
 
 function updateSnapGuides(
@@ -85,19 +110,9 @@ function clearSnapGuides() {
   if (guide) guide.innerHTML = '';
 }
 
-// Helper: get pointer position in canvas cm coordinates
-function getPointerCm(clientX: number, clientY: number) {
+function getCanvasSvgAndRect() {
   const canvasSvg = document.querySelector('#canvas svg') as SVGSVGElement | null;
-  if (!canvasSvg) return null;
-  const r = canvasSvg.getBoundingClientRect();
-  const state = usePlanStore.getState();
-  const { canvas } = state;
-  const svgX = clientX - r.left;
-  const svgY = clientY - r.top;
-  return {
-    cmX: pxToCm((svgX - canvas.panX) / canvas.zoom),
-    cmY: pxToCm((svgY - canvas.panY) / canvas.zoom),
-  };
+  return canvasSvg ? { canvasSvg, r: canvasSvg.getBoundingClientRect() } : null;
 }
 
 export function useDrag() {
@@ -106,7 +121,7 @@ export function useDrag() {
   const planStore = usePlanStore;
   const setSelectedItemId = useUiStore((s) => s.setSelectedItemId);
 
-  // dragOffset: distance from pointer (in cm) to furniture top-left corner at drag start
+  // dragOffset: offset from pointer to furniture top-left, in cm
   const dragState = useRef<{
     item: FurnitureCatalogItem;
     instanceId?: string;
@@ -116,28 +131,38 @@ export function useDrag() {
 
   const startDrag = useCallback((e: React.PointerEvent, item: FurnitureCatalogItem) => {
     e.currentTarget.setPointerCapture(e.pointerId);
-    // Catalog drag: center furniture at cursor
     dragState.current = {
       item,
       mode: 'catalog',
       dragOffset: { x: item.widthCm / 2, y: item.depthCm / 2 },
     };
-    const state = planStore.getState();
-    updateGhost(e.clientX, e.clientY, item, state.canvas.zoom);
+    const { canvas } = planStore.getState();
+    updateGhostCentered(e.clientX, e.clientY, item, canvas.zoom);
   }, [planStore]);
 
   const startMoveDrag = useCallback((e: React.PointerEvent, instance: FurnitureInstance, item: FurnitureCatalogItem) => {
     e.currentTarget.setPointerCapture(e.pointerId);
 
-    // Compute offset: where the pointer is relative to the furniture's top-left corner
-    const cm = getPointerCm(e.clientX, e.clientY);
-    const dragOffset = cm
-      ? { x: cm.cmX - instance.position.x, y: cm.cmY - instance.position.y }
-      : { x: item.widthCm / 2, y: item.depthCm / 2 };
+    const cvInfo = getCanvasSvgAndRect();
+    const { canvas } = planStore.getState();
+
+    // Compute offset: where pointer is within the furniture (in cm)
+    let dragOffset = { x: item.widthCm / 2, y: item.depthCm / 2 };
+    if (cvInfo) {
+      const cmX = pxToCm((e.clientX - cvInfo.r.left - canvas.panX) / canvas.zoom);
+      const cmY = pxToCm((e.clientY - cvInfo.r.top - canvas.panY) / canvas.zoom);
+      dragOffset = { x: cmX - instance.position.x, y: cmY - instance.position.y };
+    }
 
     dragState.current = { item, instanceId: instance.id, mode: 'move', dragOffset };
-    const state = planStore.getState();
-    updateGhost(e.clientX, e.clientY, item, state.canvas.zoom);
+
+    // Show ghost at the furniture's CURRENT position on screen
+    if (cvInfo) {
+      const screen = cmToScreen(instance.position.x, instance.position.y, cvInfo.r, canvas.panX, canvas.panY, canvas.zoom);
+      updateGhostAtPosition(screen.x, screen.y, item, canvas.zoom);
+    } else {
+      updateGhostCentered(e.clientX, e.clientY, item, canvas.zoom);
+    }
   }, [planStore]);
 
   const onPointerMove = useCallback((e: PointerEvent) => {
@@ -145,11 +170,12 @@ export function useDrag() {
     const state = planStore.getState();
     const { canvas, room, furnitureInstances } = state;
 
-    updateGhost(e.clientX, e.clientY, dragState.current.item, canvas.zoom);
+    const cvInfo = getCanvasSvgAndRect();
+    if (!cvInfo) return;
+    const { r } = cvInfo;
 
-    const cm = getPointerCm(e.clientX, e.clientY);
-    if (!cm) return;
-    const { cmX, cmY } = cm;
+    const cmX = pxToCm((e.clientX - r.left - canvas.panX) / canvas.zoom);
+    const cmY = pxToCm((e.clientY - r.top - canvas.panY) / canvas.zoom);
 
     const item = dragState.current.item;
     const { dragOffset } = dragState.current;
@@ -164,6 +190,15 @@ export function useDrag() {
 
     const snap = computeSnap(pos, item, room, otherInstances, itemMap);
     updateSnapGuides(snap.guideLines, canvas.panX, canvas.panY, canvas.zoom);
+
+    // Show ghost at the ACTUAL snapped position so user sees exactly where furniture will land
+    const screen = cmToScreen(snap.position.x, snap.position.y, r, canvas.panX, canvas.panY, canvas.zoom);
+    if (dragState.current.mode === 'move') {
+      updateGhostAtPosition(screen.x, screen.y, item, canvas.zoom);
+    } else {
+      // Catalog drag: center ghost at cursor
+      updateGhostCentered(e.clientX, e.clientY, item, canvas.zoom);
+    }
   }, [planStore]);
 
   const onPointerUp = useCallback((e: PointerEvent) => {

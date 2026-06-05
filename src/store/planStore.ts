@@ -255,37 +255,97 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         const state = get();
         if (!state.room) return;
 
-        // Block drag if any connected wall is locked
+        // Block drag if any connected wall is length-locked
         const connectedWalls = state.room.walls.filter(
           (w) => w.startPointIndex === pointIndex || w.endPointIndex === pointIndex
         );
         if (connectedWalls.some((w) => w.isLengthLocked)) return;
 
+        // Start with desired position
         const newPoints = state.room.points.map((p, i) =>
           i === pointIndex ? newPosCm : p
         );
 
-        // Check 90° constraints: verify angle between constrained walls didn't change > threshold
+        // Apply 90° constraints: instead of blocking movement, PROJECT the point
+        // onto the wall's original direction to maintain the angle.
         for (const c of state.room.constraints) {
           const wallA = state.room.walls.find((w) => w.id === c.wallAId);
           const wallB = state.room.walls.find((w) => w.id === c.wallBId);
           if (!wallA || !wallB) continue;
-          const aStart = newPoints[wallA.startPointIndex];
-          const aEnd = newPoints[wallA.endPointIndex];
-          const bStart = newPoints[wallB.startPointIndex];
-          const bEnd = newPoints[wallB.endPointIndex];
-          const axLen = Math.hypot(aEnd.x - aStart.x, aEnd.y - aStart.y);
-          const bxLen = Math.hypot(bEnd.x - bStart.x, bEnd.y - bStart.y);
-          if (axLen === 0 || bxLen === 0) continue;
-          const dot =
-            ((aEnd.x - aStart.x) * (bEnd.x - bStart.x) + (aEnd.y - aStart.y) * (bEnd.y - bStart.y)) /
-            (axLen * bxLen);
-          const angleDeg = Math.abs((Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI);
-          // Allow up to 5° deviation from 90°
-          if (Math.abs(angleDeg - 90) > 5) return;
+
+          // Find shared corner index
+          const aEnds = [wallA.startPointIndex, wallA.endPointIndex];
+          const bEnds = [wallB.startPointIndex, wallB.endPointIndex];
+          const sharedIdx = aEnds.find((i) => bEnds.includes(i));
+          if (sharedIdx === undefined) continue;
+
+          const aOtherIdx = sharedIdx === wallA.startPointIndex ? wallA.endPointIndex : wallA.startPointIndex;
+          const bOtherIdx = sharedIdx === wallB.startPointIndex ? wallB.endPointIndex : wallB.startPointIndex;
+
+          // Only constrain when the moved point is a non-shared end of a constrained wall
+          const isEndOfA = pointIndex === aOtherIdx;
+          const isEndOfB = pointIndex === bOtherIdx;
+          if (!isEndOfA && !isEndOfB) continue;
+
+          // Project newPosCm onto the original wall direction from the shared corner
+          const sharedPt = state.room.points[sharedIdx]; // original shared corner
+          const oldEndPt = state.room.points[pointIndex]; // original position of moved point
+          const dx = oldEndPt.x - sharedPt.x;
+          const dy = oldEndPt.y - sharedPt.y;
+          const len = Math.hypot(dx, dy);
+          if (len < 1) continue;
+          const ux = dx / len;
+          const uy = dy / len;
+
+          // Project desired new position onto this ray
+          const toNew = { x: newPosCm.x - sharedPt.x, y: newPosCm.y - sharedPt.y };
+          const t = Math.max(50, toNew.x * ux + toNew.y * uy); // min 50 cm wall length
+          newPoints[pointIndex] = { x: sharedPt.x + t * ux, y: sharedPt.y + t * uy };
         }
 
-        set({ room: { ...state.room, points: newPoints } });
+        // --- Move wall-snapped furniture with the wall ---
+        // For each furniture instance snapped to a wall that has the moved point as an endpoint,
+        // recompute the furniture position to maintain its relative position along the wall.
+        const updatedInstances = state.furnitureInstances.map((fi) => {
+          if (!fi.snappedTo) return fi;
+          const wall = state.room!.walls.find((w) => w.id === fi.snappedTo!.wallId);
+          if (!wall) return fi;
+          if (wall.startPointIndex !== pointIndex && wall.endPointIndex !== pointIndex) return fi;
+
+          // Old wall geometry
+          const oldA = state.room!.points[wall.startPointIndex];
+          const oldB = state.room!.points[wall.endPointIndex];
+          const oldLen = Math.hypot(oldB.x - oldA.x, oldB.y - oldA.y);
+          if (oldLen < 1) return fi;
+          const oldUx = (oldB.x - oldA.x) / oldLen;
+          const oldUy = (oldB.y - oldA.y) / oldLen;
+
+          // Decompose furniture top-left position into components along and perpendicular to old wall
+          const toPos = { x: fi.position.x - oldA.x, y: fi.position.y - oldA.y };
+          const tAlong = toPos.x * oldUx + toPos.y * oldUy;   // longitudinal (along wall)
+          const tPerp = toPos.x * (-oldUy) + toPos.y * oldUx; // perpendicular to wall
+
+          // New wall geometry (using updated points)
+          const newA = newPoints[wall.startPointIndex];
+          const newB = newPoints[wall.endPointIndex];
+          const newLen = Math.hypot(newB.x - newA.x, newB.y - newA.y);
+          if (newLen < 1) return fi;
+          const newUx = (newB.x - newA.x) / newLen;
+          const newUy = (newB.y - newA.y) / newLen;
+
+          // Recompose: maintain same along-wall and perpendicular distances
+          const newPos = {
+            x: newA.x + tAlong * newUx + tPerp * (-newUy),
+            y: newA.y + tAlong * newUy + tPerp * newUx,
+          };
+
+          return { ...fi, position: newPos };
+        });
+
+        set({
+          room: { ...state.room, points: newPoints },
+          furnitureInstances: updatedInstances,
+        });
       },
 
       setCanvasState: (canvas) =>

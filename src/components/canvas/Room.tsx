@@ -154,15 +154,13 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
   };
 
   // --- Corner-tap based 90° lock button ---
-  const cornerLockBtnPos = (() => {
-    const idx = selectedCornerIdx;
-    if (idx === null) return null;
-    const canvas = usePlanStore.getState().canvas;
-    const pt = room.points[idx];
-    const svgX = cmToPx(pt.x) * canvas.zoom + canvas.panX;
-    const svgY = cmToPx(pt.y) * canvas.zoom + canvas.panY;
-    return { x: svgX + 12, y: svgY - 36 };
-  })();
+  // Position in group-local (room-px) coordinates — the foreignObject is inside
+  // the <g transform="translate(panX,panY) scale(zoom)"> group in Canvas, so we
+  // must NOT apply panX/panY/zoom here; those are already handled by the parent transform.
+  const cornerLockBtnPos = selectedCornerIdx !== null ? {
+    x: cmToPx(room.points[selectedCornerIdx].x),
+    y: cmToPx(room.points[selectedCornerIdx].y),
+  } : null;
 
   const cornerLockWalls = selectedCornerIdx !== null
     ? room.walls.filter(
@@ -193,14 +191,11 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
     .map((p) => `${cmToPx(p.x)},${cmToPx(p.y)}`)
     .join(' ');
 
-  // Wall-selection Lock 90° button position
+  // Wall-selection Lock 90° button position (group-local coordinates)
   let wallLock90BtnPos: { x: number; y: number } | null = null;
   if (sharedCorner && !alreadyConstrained) {
-    const canvas = usePlanStore.getState().canvas;
     const pt = room.points[sharedCorner.pointIndex];
-    const svgX = cmToPx(pt.x) * canvas.zoom + canvas.panX;
-    const svgY = cmToPx(pt.y) * canvas.zoom + canvas.panY;
-    wallLock90BtnPos = { x: svgX + 16, y: svgY - 32 };
+    wallLock90BtnPos = { x: cmToPx(pt.x), y: cmToPx(pt.y) };
   }
 
   return (
@@ -284,61 +279,72 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
         })}
       </g>
 
-      {/* Corner-tap Lock 90° floating button */}
+      {/* Corner-tap Lock 90° floating button
+          foreignObject is inside <g transform="translate(panX,panY) scale(zoom)">,
+          so x/y are in room-px space. Divide offsets by zoom to keep button
+          the same apparent size regardless of zoom level. */}
       {cornerLockBtnPos && cornerLockWalls.length >= 2 && (
         <foreignObject
-          x={cornerLockBtnPos.x}
-          y={cornerLockBtnPos.y}
-          width={100}
-          height={28}
+          x={cornerLockBtnPos.x + 8 / zoom}
+          y={cornerLockBtnPos.y - 36 / zoom}
+          width={90 / zoom}
+          height={26 / zoom}
           style={{ overflow: 'visible', pointerEvents: 'auto' }}
         >
-          <button
-            onClick={handleCornerLockBtn}
-            style={{
-              fontFamily: 'var(--font-body)',
-              fontSize: '11px',
-              background: cornerExistingConstraint ? 'var(--color-text-muted, #888)' : 'var(--color-primary)',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '3px',
-              padding: '4px 8px',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
-            }}
-          >
-            {cornerExistingConstraint ? 'Unlock 90°' : 'Lock 90°'}
-          </button>
+          <div style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'top left', width: '90px', height: '26px' }}>
+            <button
+              onClick={handleCornerLockBtn}
+              style={{
+                fontFamily: 'var(--font-body)',
+                fontSize: '11px',
+                background: cornerExistingConstraint ? '#888' : 'var(--color-primary)',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '3px',
+                padding: '4px 8px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+                width: '90px',
+                height: '26px',
+              }}
+            >
+              {cornerExistingConstraint ? 'Unlock 90°' : 'Lock 90°'}
+            </button>
+          </div>
         </foreignObject>
       )}
 
       {/* Wall-selection Lock 90° floating button */}
       {wallLock90BtnPos && (
         <foreignObject
-          x={wallLock90BtnPos.x}
-          y={wallLock90BtnPos.y}
-          width={80}
-          height={28}
+          x={wallLock90BtnPos.x + 8 / zoom}
+          y={wallLock90BtnPos.y - 36 / zoom}
+          width={80 / zoom}
+          height={26 / zoom}
           style={{ overflow: 'visible', pointerEvents: 'auto' }}
         >
-          <button
-            onClick={handleLock90}
-            style={{
-              fontFamily: 'var(--font-body)',
-              fontSize: '11px',
-              background: 'var(--color-primary)',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '3px',
-              padding: '4px 8px',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
-            }}
-          >
-            Lock 90°
-          </button>
+          <div style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'top left', width: '80px', height: '26px' }}>
+            <button
+              onClick={handleLock90}
+              style={{
+                fontFamily: 'var(--font-body)',
+                fontSize: '11px',
+                background: 'var(--color-primary)',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '3px',
+                padding: '4px 8px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+                width: '80px',
+                height: '26px',
+              }}
+            >
+              Lock 90°
+            </button>
+          </div>
         </foreignObject>
       )}
     </>
