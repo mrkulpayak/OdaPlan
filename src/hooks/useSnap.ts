@@ -10,8 +10,8 @@ export interface SnapResult {
 }
 
 /**
- * Compute the 4 side midpoints of a furniture rectangle after applying its rotation.
- * The SVG rotation is applied around the furniture's visual center.
+ * Compute side midpoints of a furniture rectangle at the given rotation.
+ * SVG rotation rotates around the visual center (pos.x + w/2, pos.y + d/2).
  */
 function rotatedSideMidpoints(
   pos: { x: number; y: number },
@@ -21,16 +21,13 @@ function rotatedSideMidpoints(
 ): Record<FurnitureFrontSide, { x: number; y: number }> {
   const cx = pos.x + w / 2;
   const cy = pos.y + d / 2;
-  const r = (rotDeg * Math.PI) / 180;
+  const r  = (rotDeg * Math.PI) / 180;
   const cos = Math.cos(r);
   const sin = Math.sin(r);
-
-  // Rotate offset (dx, dy) around center
   const rot = (dx: number, dy: number) => ({
     x: cx + dx * cos - dy * sin,
     y: cy + dx * sin + dy * cos,
   });
-
   return {
     top:    rot(0,      -d / 2),
     bottom: rot(0,       d / 2),
@@ -40,7 +37,7 @@ function rotatedSideMidpoints(
 }
 
 /**
- * Compute the 4 corners of a furniture rectangle after applying its rotation.
+ * Compute the 4 corners of a furniture rectangle at the given rotation.
  */
 function rotatedCorners(
   pos: { x: number; y: number },
@@ -50,31 +47,58 @@ function rotatedCorners(
 ) {
   const cx = pos.x + w / 2;
   const cy = pos.y + d / 2;
-  const r = (rotDeg * Math.PI) / 180;
+  const r  = (rotDeg * Math.PI) / 180;
   const cos = Math.cos(r);
   const sin = Math.sin(r);
-
   const rot = (dx: number, dy: number) => ({
     x: cx + dx * cos - dy * sin,
     y: cy + dx * sin + dy * cos,
   });
-
   return [
-    rot(-w / 2, -d / 2), // TL
-    rot( w / 2, -d / 2), // TR
-    rot( w / 2,  d / 2), // BR
-    rot(-w / 2,  d / 2), // BL
+    rot(-w / 2, -d / 2),
+    rot( w / 2, -d / 2),
+    rot( w / 2,  d / 2),
+    rot(-w / 2,  d / 2),
   ];
 }
 
 /**
- * Compute snap result for a furniture item being dragged.
+ * For a wall with inward normal (nx, ny), compute the exact rotation (degrees) needed
+ * for each face of the furniture to become flush against that wall.
  *
- * Key design decisions:
- * - currentRotation is ALWAYS preserved — snap never overrides rotation.
- * - Wall snap measures distance from the ROTATED side midpoints to the wall,
- *   so whichever face is currently facing the wall will snap to it.
- * - For corner snap, rotated corners are used.
+ * The face must face OUTWARD from the furniture toward the wall, so its world-space
+ * normal must equal (-nx, -ny).
+ *
+ * SVG rotate(θ) maps a vector (dx, dy) → (dx cosθ − dy sinθ, dx sinθ + dy cosθ).
+ *
+ *  Face 'top'    unrotated normal (0,−1) → rotated (sinθ, −cosθ) = (−nx, −ny)
+ *                → sinθ = −nx, cosθ = ny  → θ = atan2(−nx, ny)
+ *  Face 'bottom' unrotated normal (0, 1) → rotated (−sinθ, cosθ) = (−nx, −ny)
+ *                → sinθ = nx, cosθ = −ny  → θ = atan2(nx, −ny)
+ *  Face 'left'   unrotated normal (−1,0) → rotated (−cosθ,−sinθ) = (−nx, −ny)
+ *                → cosθ = nx, sinθ = ny   → θ = atan2(ny, nx)
+ *  Face 'right'  unrotated normal (1, 0) → rotated (cosθ, sinθ) = (−nx, −ny)
+ *                → cosθ = −nx, sinθ = −ny → θ = atan2(−ny, −nx)
+ */
+function flushRotations(nx: number, ny: number): Record<FurnitureFrontSide, number> {
+  const deg = (rad: number) => ((rad * 180) / Math.PI + 360) % 360;
+  return {
+    top:    deg(Math.atan2(-nx,  ny)),
+    bottom: deg(Math.atan2( nx, -ny)),
+    left:   deg(Math.atan2( ny,  nx)),
+    right:  deg(Math.atan2(-ny, -nx)),
+  };
+}
+
+/**
+ * Main snap computation.
+ *
+ * Priority 1 — corner snap  : rotated furniture corner → room corner (translate only, no rotation change)
+ * Priority 2 — wall snap    : closest rotated face → wall, AND rotate face flush with wall
+ * Priority 3 — furniture→furniture snap
+ *
+ * @param currentRotation  The furniture's current rotation in degrees (preserved when not snapping;
+ *                         adjusted to align with wall when snapping).
  */
 export function computeSnap(
   pos: { x: number; y: number },
@@ -92,70 +116,92 @@ export function computeSnap(
   let bestDist = SNAP_DISTANCE_CM + 1;
   let bestResult: SnapResult | null = null;
 
-  // ─── Priority 1: Corner snap ────────────────────────────────────────────────
-  // Snap a rotated furniture corner to a room corner.
+  // ── Priority 1: corner snap (translate only) ─────────────────────────────
   const furCorners = rotatedCorners(pos, w, d, currentRotation);
   for (const roomCorner of room.points) {
     for (const fc of furCorners) {
       const dist = Math.hypot(fc.x - roomCorner.x, fc.y - roomCorner.y);
       if (dist < SNAP_DISTANCE_CM && dist < bestDist) {
         bestDist = dist;
-        // Offset the whole furniture so this corner lands exactly on the room corner
         bestResult = {
           position: {
             x: pos.x + (roomCorner.x - fc.x),
             y: pos.y + (roomCorner.y - fc.y),
           },
-          rotation: currentRotation,
+          rotation: currentRotation, // corner snap doesn't change rotation
           guideLines: [],
         };
       }
     }
   }
-
   if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
 
-  // ─── Priority 2: Wall snap ──────────────────────────────────────────────────
-  // For each wall, check each ROTATED side midpoint's distance to the wall.
-  // The side midpoint that is closest to the wall determines the snap.
-  // This works uniformly for axis-aligned AND angled walls.
+  // ── Priority 2: wall snap (translate + rotate flush) ─────────────────────
+  //
+  // Algorithm:
+  //   For each wall × each face:
+  //   1. Measure distance from the CURRENT-rotation face midpoint to the wall.
+  //      (This is the trigger: "how close is this face to this wall right now?")
+  //   2. If within snap distance and best so far:
+  //      a. Compute the exact rotation needed for this face to be flush.
+  //      b. Re-compute the face midpoint at the NEW rotation.
+  //      c. Find the nearest point on the wall to the new midpoint.
+  //      d. Offset the furniture so the new midpoint lands on the wall point.
+  //
+  // Result: the face that was approaching the wall gets rotated flush, then
+  // positioned so it's exactly on the wall.
   const mids = rotatedSideMidpoints(pos, w, d, currentRotation);
   const sideEntries = Object.entries(mids) as Array<[FurnitureFrontSide, { x: number; y: number }]>;
 
   for (const wall of room.walls) {
     const a = room.points[wall.startPointIndex];
     const b = room.points[wall.endPointIndex];
+    const wallLen = Math.hypot(b.x - a.x, b.y - a.y);
+    if (wallLen < 1) continue;
+
+    const ux = (b.x - a.x) / wallLen;
+    const uy = (b.y - a.y) / wallLen;
+    const nx = -uy; // inward normal
+    const ny =  ux;
+
+    const reqRot = flushRotations(nx, ny);
 
     for (const [side, midpoint] of sideEntries) {
       const dist = distancePointToSegment(midpoint, a, b);
       if (dist >= bestDist || dist > SNAP_DISTANCE_CM) continue;
 
-      // Find the nearest point on the wall to this side midpoint
-      const wallPt = closestPointOnSegment(midpoint, a, b);
+      // New rotation that makes this face flush with the wall
+      const newRotation = reqRot[side];
 
-      // The side midpoint's offset from the furniture's visual center
+      // Face midpoint at the new rotation
+      const newMids = rotatedSideMidpoints(pos, w, d, newRotation);
+      const newMid  = newMids[side];
+
+      // Nearest point on wall to the (new-rotation) face midpoint
+      const wallPt = closestPointOnSegment(newMid, a, b);
+
+      // Face midpoint offset from furniture visual center at new rotation
       const cx = pos.x + w / 2;
       const cy = pos.y + d / 2;
-      const rdx = midpoint.x - cx; // rotated offset x
-      const rdy = midpoint.y - cy; // rotated offset y
+      const rdx = newMid.x - cx;
+      const rdy = newMid.y - cy;
 
-      // Move the furniture center so the side midpoint lands exactly on wallPt
-      const newCenter = { x: wallPt.x - rdx, y: wallPt.y - rdy };
+      // Move center so the face midpoint lands exactly on wallPt
+      const newCenter  = { x: wallPt.x - rdx, y: wallPt.y - rdy };
       const snappedPos = { x: newCenter.x - w / 2, y: newCenter.y - d / 2 };
 
-      bestDist = dist;
+      bestDist  = dist;
       bestResult = {
-        position: snappedPos,
-        rotation: currentRotation, // rotation is ALWAYS preserved
+        position:  snappedPos,
+        rotation:  newRotation,
         snappedTo: { wallId: wall.id, side },
         guideLines: [{ x1: a.x, y1: a.y, x2: b.x, y2: b.y }],
       };
     }
   }
-
   if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
 
-  // ─── Priority 3: Furniture-to-furniture snap ────────────────────────────────
+  // ── Priority 3: furniture-to-furniture snap ───────────────────────────────
   for (const other of otherInstances) {
     const otherItem = otherItems.get(other.catalogItemId);
     if (!otherItem) continue;
@@ -164,23 +210,22 @@ export function computeSnap(
     const op = other.position;
 
     const checks: Array<[number, number, number, number, { x: number; y: number }]> = [
-      [pos.x + w,   pos.y + d / 2, op.x,      op.y + od / 2, { x: op.x - w,      y: pos.y }],
-      [pos.x,       pos.y + d / 2, op.x + ow, op.y + od / 2, { x: op.x + ow,     y: pos.y }],
-      [pos.x + w/2, pos.y + d,     op.x + ow/2, op.y,        { x: pos.x,          y: op.y - d }],
-      [pos.x + w/2, pos.y,         op.x + ow/2, op.y + od,   { x: pos.x,          y: op.y + od }],
+      [pos.x + w,   pos.y + d / 2, op.x,        op.y + od / 2, { x: op.x - w,  y: pos.y }],
+      [pos.x,       pos.y + d / 2, op.x + ow,   op.y + od / 2, { x: op.x + ow, y: pos.y }],
+      [pos.x + w/2, pos.y + d,     op.x + ow/2, op.y,          { x: pos.x,     y: op.y - d }],
+      [pos.x + w/2, pos.y,         op.x + ow/2, op.y + od,     { x: pos.x,     y: op.y + od }],
     ];
 
     for (const [mx, my, ox, oy, snappedPos] of checks) {
       const dist = Math.hypot(mx - ox, my - oy);
       if (dist < SNAP_DISTANCE_CM && dist < bestDist) {
-        bestDist = dist;
+        bestDist   = dist;
         bestResult = { position: snappedPos, rotation: currentRotation, guideLines: [] };
       }
     }
   }
-
   if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
 
-  // No snap — return original position with original rotation
+  // No snap — preserve current position and rotation
   return { position: pos, rotation: currentRotation, guideLines: [] };
 }
