@@ -1,5 +1,5 @@
 import { CM_TO_PX } from './constants';
-import type { Point } from '../types';
+import type { Point, FurnitureFrontSide } from '../types';
 
 export function distancePointToSegment(p: Point, a: Point, b: Point): number {
   const dx = b.x - a.x;
@@ -60,4 +60,34 @@ export function cmToPx(cm: number): number {
 
 export function pxToCm(px: number): number {
   return px / CM_TO_PX;
+}
+
+/**
+ * Compute the offset vector from a furniture's VISUAL CENTER to its snapped face midpoint,
+ * accounting for the furniture's rotation (SVG rotate(θ) around center).
+ *
+ * SVG rotate(θ) maps (dx,dy) → (dx cosθ − dy sinθ, dx sinθ + dy cosθ)
+ *
+ *  top    : unrotated (0, −d/2)  → (+(d/2)sinθ, −(d/2)cosθ)
+ *  bottom : unrotated (0, +d/2)  → (−(d/2)sinθ, +(d/2)cosθ)
+ *  left   : unrotated (−w/2, 0)  → (−(w/2)cosθ, −(w/2)sinθ)
+ *  right  : unrotated (+w/2, 0)  → (+(w/2)cosθ, +(w/2)sinθ)
+ */
+export function faceMidpointOffset(
+  side: FurnitureFrontSide,
+  widthCm: number,
+  depthCm: number,
+  rotDeg: number
+): { x: number; y: number } {
+  const θ   = (rotDeg * Math.PI) / 180;
+  const cos = Math.cos(θ);
+  const sin = Math.sin(θ);
+  const w2  = widthCm / 2;
+  const d2  = depthCm / 2;
+  switch (side) {
+    case 'top':    return { x:  d2 * sin, y: -d2 * cos };
+    case 'bottom': return { x: -d2 * sin, y:  d2 * cos };
+    case 'left':   return { x: -w2 * cos, y: -w2 * sin };
+    case 'right':  return { x:  w2 * cos, y:  w2 * sin };
+  }
 }

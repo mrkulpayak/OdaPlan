@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { PlanState, Room, FurnitureInstance, CanvasState, Point, Door, Window } from '../types';
-import { segmentLength, segmentAngleDegrees, cmToPx } from '../lib/geometry';
+import { segmentLength, segmentAngleDegrees, cmToPx, faceMidpointOffset } from '../lib/geometry';
+import { useCatalogStore } from './catalogStore';
 
 interface PlanActions {
   setRoom: (room: Room | null) => void;
@@ -337,13 +338,22 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         }
 
         // --- Move wall-snapped furniture with the wall ---
-        // For each furniture instance snapped to a wall that has the moved point as an endpoint,
-        // recompute the furniture position to maintain its relative position along the wall.
+        // The furniture's snapped FACE MIDPOINT must stay flush on the wall.
+        // The along-wall distance is measured from the FIXED (non-dragged) wall endpoint
+        // so the furniture pivots around that point exactly as the wall does.
+        const { products } = useCatalogStore.getState();
+        const catalogMap = new Map(products.map((p) => [p.id, p]));
+
         const updatedInstances = state.furnitureInstances.map((fi) => {
           if (!fi.snappedTo) return fi;
           const wall = state.room!.walls.find((w) => w.id === fi.snappedTo!.wallId);
           if (!wall) return fi;
           if (wall.startPointIndex !== pointIndex && wall.endPointIndex !== pointIndex) return fi;
+
+          const catalogItem = catalogMap.get(fi.catalogItemId);
+          if (!catalogItem) return fi;
+          const fw = catalogItem.widthCm;
+          const fd = catalogItem.depthCm;
 
           // Old wall geometry
           const oldA = state.room!.points[wall.startPointIndex];
@@ -353,11 +363,6 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           const oldUx = (oldB.x - oldA.x) / oldLen;
           const oldUy = (oldB.y - oldA.y) / oldLen;
 
-          // Decompose furniture top-left position into components along and perpendicular to old wall
-          const toPos = { x: fi.position.x - oldA.x, y: fi.position.y - oldA.y };
-          const tAlong = toPos.x * oldUx + toPos.y * oldUy;   // longitudinal (along wall)
-          const tPerp = toPos.x * (-oldUy) + toPos.y * oldUx; // perpendicular to wall
-
           // New wall geometry (using updated points)
           const newA = newPoints[wall.startPointIndex];
           const newB = newPoints[wall.endPointIndex];
@@ -366,17 +371,48 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           const newUx = (newB.x - newA.x) / newLen;
           const newUy = (newB.y - newA.y) / newLen;
 
-          // Recompose: maintain same along-wall and perpendicular distances
-          const newPos = {
-            x: newA.x + tAlong * newUx + tPerp * (-newUy),
-            y: newA.y + tAlong * newUy + tPerp * newUx,
-          };
+          // New rotation: rotate by the same angle delta as the wall
+          const oldWallAngle = Math.atan2(oldUy, oldUx) * (180 / Math.PI);
+          const newWallAngle = Math.atan2(newUy, newUx) * (180 / Math.PI);
+          const angleDelta   = newWallAngle - oldWallAngle;
+          const newRotation  = ((fi.rotation + angleDelta) % 360 + 360) % 360;
 
-          // Also rotate furniture to match the new wall angle
-          const oldWallAngleDeg = Math.atan2(oldUy, oldUx) * (180 / Math.PI);
-          const newWallAngleDeg = Math.atan2(newUy, newUx) * (180 / Math.PI);
-          const angleDelta = newWallAngleDeg - oldWallAngleDeg;
-          const newRotation = ((fi.rotation + angleDelta) % 360 + 360) % 360;
+          // Compute the snapped face midpoint in WORLD SPACE using old rotation
+          const side       = fi.snappedTo!.side;
+          const oldOffset  = faceMidpointOffset(side, fw, fd, fi.rotation);
+          const oldCenterX = fi.position.x + fw / 2;
+          const oldCenterY = fi.position.y + fd / 2;
+          const fmX = oldCenterX + oldOffset.x; // face midpoint world x
+          const fmY = oldCenterY + oldOffset.y; // face midpoint world y
+
+          // Determine the FIXED (non-dragged) wall endpoint — this is the pivot
+          const fixedIsStart = (pointIndex === wall.endPointIndex);
+          const fixedPt = fixedIsStart ? oldA : oldB; // stays the same in newPoints too
+
+          // Along-wall direction FROM the fixed endpoint
+          // If fixed = start (A): direction is A→B = (oldUx, oldUy)
+          // If fixed = end   (B): direction is B→A = (−oldUx, −oldUy)
+          const oldFdx = fixedIsStart ?  oldUx : -oldUx;
+          const oldFdy = fixedIsStart ?  oldUy : -oldUy;
+          const newFdx = fixedIsStart ?  newUx : -newUx;
+          const newFdy = fixedIsStart ?  newUy : -newUy;
+
+          // Along-wall distance from the fixed point to the face midpoint
+          const tAlong = (fmX - fixedPt.x) * oldFdx + (fmY - fixedPt.y) * oldFdy;
+
+          // New face midpoint: same along-wall distance from fixed point, on the NEW wall
+          const newFmX = fixedPt.x + tAlong * newFdx;
+          const newFmY = fixedPt.y + tAlong * newFdy;
+
+          // Face midpoint offset at the NEW rotation
+          const newOffset  = faceMidpointOffset(side, fw, fd, newRotation);
+
+          // New center = new face midpoint − new face offset
+          const newCX = newFmX - newOffset.x;
+          const newCY = newFmY - newOffset.y;
+
+          // New top-left position
+          const newPos = { x: newCX - fw / 2, y: newCY - fd / 2 };
 
           return { ...fi, position: newPos, rotation: newRotation };
         });
