@@ -588,8 +588,6 @@ export const usePlanStore = create<PlanState & PlanActions>()(
 
         const p1Idx = wall.startPointIndex;
         const p2Idx = wall.endPointIndex;
-        const P1 = state.room.points[p1Idx];
-        const P2 = state.room.points[p2Idx];
 
         /** Far endpoint of the ONE other wall meeting at sharedIdx */
         const getConnFar = (sharedIdx: number): { Q: Point } | null => {

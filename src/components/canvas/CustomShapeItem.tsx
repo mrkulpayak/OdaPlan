@@ -194,7 +194,6 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
   const editorW = 200;   // px (at zoom=1)
   const editorH = DIM_KEYS[instance.shapeType].length * 36 + 72;
   const editorX = wPx / 2 - editorW / 2;
-  const editorY = -(editorH + 8) / zoom;
 
   const annotations = shapeEdgeAnnotations(instance.shapeType, instance.dims);
   const labelOffset = 14; // px offset from edge midpoint
