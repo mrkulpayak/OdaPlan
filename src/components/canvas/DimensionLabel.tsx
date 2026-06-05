@@ -1,5 +1,5 @@
 import { memo, useState, useRef, useEffect } from 'react';
-import { Lock, Unlock } from 'lucide-react';
+import { Lock, Unlock, Pin, PinOff } from 'lucide-react';
 import type { Point } from '../../types';
 import { segmentAngleDegrees } from '../../lib/geometry';
 
@@ -9,14 +9,16 @@ interface Props {
   b: Point; // px
   lengthCm: number;
   isLocked: boolean;
+  isPinned: boolean;
   onCommit: (wallId: string, newLengthCm: number) => void;
   onToggleLock: (wallId: string) => void;
+  onTogglePin: (wallId: string) => void;
   viewRotation: number;
   zoom: number;
 }
 
 export const DimensionLabel = memo(function DimensionLabel({
-  wallId, a, b, lengthCm, isLocked, onCommit, onToggleLock, viewRotation, zoom,
+  wallId, a, b, lengthCm, isLocked, isPinned, onCommit, onToggleLock, onTogglePin, viewRotation, zoom,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [inputVal, setInputVal] = useState('');
@@ -112,7 +114,7 @@ export const DimensionLabel = memo(function DimensionLabel({
         </text>
       )}
 
-      {/* Lock icon */}
+      {/* Length lock icon */}
       <g
         data-interactive="true"
         transform={`translate(${labelX + 28}, ${labelY - 6}) rotate(${textRotation}, 6, 6)`}
@@ -121,17 +123,24 @@ export const DimensionLabel = memo(function DimensionLabel({
       >
         <rect width={14} height={14} fill="transparent" />
         {isLocked ? (
-          <Lock
-            size={12}
-            color="var(--color-accent)"
-            style={{ display: 'block' }}
-          />
+          <Lock size={12} color="var(--color-accent)" style={{ display: 'block' }} />
         ) : (
-          <Unlock
-            size={12}
-            color="var(--color-text-muted)"
-            style={{ display: 'block' }}
-          />
+          <Unlock size={12} color="var(--color-text-muted)" style={{ display: 'block' }} />
+        )}
+      </g>
+
+      {/* Pin icon — fully anchors the wall in space */}
+      <g
+        data-interactive="true"
+        transform={`translate(${labelX + 44}, ${labelY - 6}) rotate(${textRotation}, 6, 6)`}
+        onClick={() => onTogglePin(wallId)}
+        style={{ cursor: 'pointer' }}
+      >
+        <rect width={14} height={14} fill="transparent" />
+        {isPinned ? (
+          <Pin size={12} color="#ef4444" style={{ display: 'block' }} />
+        ) : (
+          <PinOff size={12} color="var(--color-text-muted)" style={{ display: 'block' }} />
         )}
       </g>
     </g>

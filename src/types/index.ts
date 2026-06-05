@@ -9,6 +9,7 @@ export interface Wall {
   endPointIndex: number;
   isLengthLocked: boolean;
   lockedLength?: number;
+  isPinned: boolean; // fully anchors both endpoints in space — top of the constraint hierarchy
 }
 
 export type ConstraintType = 'angle';

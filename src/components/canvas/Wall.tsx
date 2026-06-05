@@ -15,6 +15,7 @@ interface Props {
   isSelected: boolean;
   onCommitLength: (wallId: string, newLengthCm: number) => void;
   onToggleLock: (wallId: string) => void;
+  onTogglePin: (wallId: string) => void;
   onSelectDoor: (id: string) => void;
   onSelectWindow: (id: string) => void;
   onWallClick: (wallId: string, e: React.PointerEvent) => void;
@@ -22,7 +23,7 @@ interface Props {
 
 export const Wall = memo(function Wall({
   wall, points, doors, windows, viewRotation, zoom, isSelected,
-  onCommitLength, onToggleLock, onSelectDoor, onSelectWindow, onWallClick,
+  onCommitLength, onToggleLock, onTogglePin, onSelectDoor, onSelectWindow, onWallClick,
 }: Props) {
   const aCm = points[wall.startPointIndex];
   const bCm = points[wall.endPointIndex];
@@ -82,8 +83,14 @@ export const Wall = memo(function Wall({
           key={i}
           x1={seg.x1} y1={seg.y1}
           x2={seg.x2} y2={seg.y2}
-          stroke={isSelected ? 'var(--color-primary)' : 'var(--color-room-outline)'}
-          strokeWidth={isSelected ? 2.5 : 1.5}
+          stroke={
+            wall.isPinned
+              ? '#ef4444'
+              : isSelected
+                ? 'var(--color-primary)'
+                : 'var(--color-room-outline)'
+          }
+          strokeWidth={wall.isPinned ? 2.5 : isSelected ? 2.5 : 1.5}
           strokeLinecap="round"
           style={{ pointerEvents: 'none' }}
         />
@@ -103,8 +110,10 @@ export const Wall = memo(function Wall({
         b={bPx}
         lengthCm={lengthCm}
         isLocked={wall.isLengthLocked}
+        isPinned={wall.isPinned}
         onCommit={onCommitLength}
         onToggleLock={onToggleLock}
+        onTogglePin={onTogglePin}
         viewRotation={viewRotation}
         zoom={zoom}
       />

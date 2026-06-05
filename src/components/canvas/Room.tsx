@@ -35,6 +35,7 @@ interface Props {
 export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: Props) {
   const updateWallLength = usePlanStore((s) => s.updateWallLength);
   const toggleWallLock = usePlanStore((s) => s.toggleWallLock);
+  const toggleWallPin = usePlanStore((s) => s.toggleWallPin);
   const addAngleConstraint = usePlanStore((s) => s.addAngleConstraint);
   const removeConstraint = usePlanStore((s) => s.removeConstraint);
   const moveRoomPoint = usePlanStore((s) => s.moveRoomPoint);
@@ -126,8 +127,9 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
       const connectedWalls = room.walls.filter(
         (w) => w.startPointIndex === idx || w.endPointIndex === idx
       );
-      if (connectedWalls.some((w) => w.isLengthLocked)) {
-        addToast({ type: 'warning', message: 'Cannot drag a corner connected to a locked wall.' });
+      // Only pinned walls block dragging; length-locked walls apply compass constraint instead
+      if (connectedWalls.some((w) => w.isPinned)) {
+        addToast({ type: 'warning', message: 'Bu köşe sabitlenmiş bir duvara bağlı, taşınamaz.' });
         cornerPointerStartRef.current = null;
         return;
       }
@@ -254,6 +256,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
               isSelected={selectedWallIds.includes(wall.id)}
               onCommitLength={handleCommitLength}
               onToggleLock={toggleWallLock}
+              onTogglePin={toggleWallPin}
               onSelectDoor={setSelectedItemId}
               onSelectWindow={setSelectedItemId}
               onWallClick={handleWallClick}

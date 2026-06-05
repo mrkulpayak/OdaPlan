@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { PlanState, Room, FurnitureInstance, CanvasState, Point, Door, Window } from '../types';
+import type { PlanState, Room, Wall, FurnitureInstance, CanvasState, Point, Door, Window } from '../types';
 import { segmentLength, segmentAngleDegrees, cmToPx, faceMidpointOffset } from '../lib/geometry';
 import { useCatalogStore } from './catalogStore';
 
@@ -22,6 +22,7 @@ interface PlanActions {
   createRoomFromPoints: (points: Point[]) => void;
   addAngleConstraint: (sharedPointIndex: number, angleDeg: number) => void;
   removeConstraint: (constraintId: string) => void;
+  toggleWallPin: (wallId: string) => void;
   moveRoomPoint: (pointIndex: number, newPosCm: Point) => void;
   setCanvasState: (canvas: Partial<CanvasState>) => void;
   fitRoomToCanvas: (canvasWidth: number, canvasHeight: number) => void;
@@ -67,11 +68,12 @@ function computeFitTransform(points: Point[], canvasWidth: number, canvasHeight:
 }
 
 function buildRoom(points: Point[]): Room {
-  const walls = points.map((_, i) => ({
+  const walls: Wall[] = points.map((_, i) => ({
     id: makeId(),
     startPointIndex: i,
     endPointIndex: (i + 1) % points.length,
     isLengthLocked: false,
+    isPinned: false,
   }));
   return { points, walls, doors: [], windows: [], constraints: [] };
 }
@@ -129,8 +131,11 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         const wall = state.room.walls.find((w) => w.id === wallId);
         if (!wall) return { blocked: false };
 
+        if (wall.isPinned) {
+          return { blocked: true, reason: 'Bu duvar tam olarak sabitlenmiş. Sabitlemeyi kaldırarak ölçüyü değiştirebilirsiniz.' };
+        }
         if (wall.isLengthLocked) {
-          return { blocked: true, reason: 'This change conflicts with locked dimensions. Unlock the affected wall to apply this change.' };
+          return { blocked: true, reason: 'Bu duvarın uzunluğu kilitli. Kilidi açarak ölçüyü değiştirebilirsiniz.' };
         }
 
         const points = [...state.room.points.map((p) => ({ ...p }))];
@@ -154,11 +159,24 @@ export const usePlanStore = create<PlanState & PlanActions>()(
       toggleWallLock: (wallId) => {
         set((s) => {
           if (!s.room) return s;
+          const wall = s.room.walls.find((w) => w.id === wallId);
+          if (!wall) return s;
+          // Capture current length when locking so compass constraint can use it
+          const currentLength = segmentLength(
+            s.room.points[wall.startPointIndex],
+            s.room.points[wall.endPointIndex]
+          );
           return {
             room: {
               ...s.room,
               walls: s.room.walls.map((w) =>
-                w.id === wallId ? { ...w, isLengthLocked: !w.isLengthLocked } : w
+                w.id === wallId
+                  ? {
+                      ...w,
+                      isLengthLocked: !w.isLengthLocked,
+                      lockedLength: !w.isLengthLocked ? currentLength : w.lockedLength,
+                    }
+                  : w
               ),
             },
           };
@@ -249,15 +267,30 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           return { room: { ...s.room, constraints: s.room.constraints.filter((c) => c.id !== constraintId) } };
         }),
 
+      toggleWallPin: (wallId) =>
+        set((s) => {
+          if (!s.room) return s;
+          return {
+            room: {
+              ...s.room,
+              walls: s.room.walls.map((w) =>
+                w.id === wallId ? { ...w, isPinned: !w.isPinned } : w
+              ),
+            },
+          };
+        }),
+
       moveRoomPoint: (pointIndex, newPosCm) => {
         const state = get();
         if (!state.room) return;
 
-        // Block drag if any connected wall is length-locked
         const connectedWalls = state.room.walls.filter(
           (w) => w.startPointIndex === pointIndex || w.endPointIndex === pointIndex
         );
-        if (connectedWalls.some((w) => w.isLengthLocked)) return;
+
+        // ── Pinned wall block ────────────────────────────────────────────────
+        // If this point belongs to a pinned wall, it is fully immovable.
+        if (connectedWalls.some((w) => w.isPinned)) return;
 
         // Start with desired position
         const newPoints = state.room.points.map((p, i) =>
@@ -335,6 +368,37 @@ export const usePlanStore = create<PlanState & PlanActions>()(
             newPoints[pointIndex] = { x: sharedPt.x + t * targetDirX, y: sharedPt.y + t * targetDirY };
           }
           // If neither arm nor shared → this constraint doesn't affect this drag, skip.
+        }
+
+        // ── Length (compass) constraint ──────────────────────────────────────
+        // For each length-locked wall connected to this point:
+        // The other endpoint is the "pivot". The dragged point can only move
+        // on a circle of radius = locked length centered at the pivot.
+        // This replaces the old "block entirely if length-locked" behavior.
+        for (const wall of connectedWalls) {
+          if (!wall.isLengthLocked) continue;
+          const lockedLen = wall.lockedLength ?? segmentLength(
+            state.room.points[wall.startPointIndex],
+            state.room.points[wall.endPointIndex]
+          );
+          if (lockedLen < 1) continue;
+
+          const otherIdx = wall.startPointIndex === pointIndex
+            ? wall.endPointIndex
+            : wall.startPointIndex;
+          // Use the ORIGINAL (pre-move) position of the other endpoint as pivot
+          const pivot = state.room.points[otherIdx];
+
+          const dx = newPoints[pointIndex].x - pivot.x;
+          const dy = newPoints[pointIndex].y - pivot.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist < 0.1) continue; // avoid division by zero if right on pivot
+
+          // Project onto circle of radius lockedLen
+          newPoints[pointIndex] = {
+            x: pivot.x + (dx / dist) * lockedLen,
+            y: pivot.y + (dy / dist) * lockedLen,
+          };
         }
 
         // --- Move wall-snapped furniture with the wall ---
