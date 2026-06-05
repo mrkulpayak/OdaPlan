@@ -57,9 +57,11 @@ export const Door = memo(function Door({ door, wallStart, wallEnd, onSelect }: P
 
   // Arc: from swingTipBase to swingTip, radius = doorWidthPx
   // large-arc-flag = 0 (always quarter arc), sweep based on direction
+  // Sweep flag: yay her zaman menteşe merkezinden çizilmeli (çeyrek daire)
+  // Çapraz çarpım analizi ile doğru yön: left+inside=1, left+outside=0, right+inside=0, right+outside=1
   const sweepFlag = door.hingeSide === 'left'
-    ? (door.opensTo === 'inside' ? 0 : 1)
-    : (door.opensTo === 'inside' ? 1 : 0);
+    ? (door.opensTo === 'inside' ? 1 : 0)
+    : (door.opensTo === 'inside' ? 0 : 1);
 
   const arcPath = `M ${swingTipBase.x} ${swingTipBase.y} A ${doorWidthPx} ${doorWidthPx} 0 0 ${sweepFlag} ${swingTipX} ${swingTipY}`;
 
