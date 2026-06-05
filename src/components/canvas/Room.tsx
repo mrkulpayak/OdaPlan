@@ -153,8 +153,8 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
     }
   };
 
-  // --- Wall-selection based Lock 90° (existing) ---
-  const getSharedCorner = (): { pointIndex: number; wallAId: string; wallBId: string } | null => {
+  // --- Wall-selection based Lock (existing) ---
+  const getSharedCorner = (): { pointIndex: number } | null => {
     if (selectedWallIds.length !== 2) return null;
     const [aId, bId] = selectedWallIds;
     const wallA = room.walls.find((w) => w.id === aId);
@@ -164,26 +164,23 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
     const bIndices = [wallB.startPointIndex, wallB.endPointIndex];
     const shared = aIndices.find((i) => bIndices.includes(i));
     if (shared === undefined) return null;
-    return { pointIndex: shared, wallAId: aId, wallBId: bId };
+    return { pointIndex: shared };
   };
 
   const sharedCorner = getSharedCorner();
   const alreadyConstrained = sharedCorner
-    ? room.constraints.some(
-        (c) =>
-          (c.wallAId === sharedCorner.wallAId && c.wallBId === sharedCorner.wallBId) ||
-          (c.wallAId === sharedCorner.wallBId && c.wallBId === sharedCorner.wallAId)
-      )
+    ? room.constraints.some((c) => c.sharedPointIndex === sharedCorner.pointIndex)
     : false;
 
   const handleLock90 = () => {
     if (!sharedCorner) return;
-    const wallA = room.walls.find((w) => w.id === sharedCorner.wallAId);
-    const wallB = room.walls.find((w) => w.id === sharedCorner.wallBId);
-    const angleDeg = (wallA && wallB)
-      ? computeCornerAngleDeg(room.points, wallA, wallB, sharedCorner.pointIndex)
+    const walls = room.walls.filter(
+      (w) => w.startPointIndex === sharedCorner.pointIndex || w.endPointIndex === sharedCorner.pointIndex
+    );
+    const angleDeg = walls.length >= 2
+      ? computeCornerAngleDeg(room.points, walls[0], walls[1], sharedCorner.pointIndex)
       : 90;
-    addAngleConstraint(sharedCorner.wallAId, sharedCorner.wallBId, angleDeg);
+    addAngleConstraint(sharedCorner.pointIndex, angleDeg);
     clearWallSelection();
     addToast({ type: 'success', message: `${angleDeg}° constraint applied.` });
   };
@@ -203,19 +200,15 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
       )
     : [];
 
-  const cornerExistingConstraint = cornerLockWalls.length >= 2
-    ? room.constraints.find(
-        (c) =>
-          (c.wallAId === cornerLockWalls[0].id && c.wallBId === cornerLockWalls[1].id) ||
-          (c.wallAId === cornerLockWalls[1].id && c.wallBId === cornerLockWalls[0].id)
-      )
+  const cornerExistingConstraint = selectedCornerIdx !== null
+    ? room.constraints.find((c) => c.sharedPointIndex === selectedCornerIdx)
     : undefined;
 
   const handleCornerLockBtn = () => {
-    if (!cornerLockWalls.length) return;
+    if (selectedCornerIdx === null) return;
     const parsedAngle = parseInt(cornerAngleInput, 10);
     const angleDeg = Number.isNaN(parsedAngle) ? 90 : Math.max(5, Math.min(175, parsedAngle));
-    addAngleConstraint(cornerLockWalls[0].id, cornerLockWalls[1].id, angleDeg);
+    addAngleConstraint(selectedCornerIdx, angleDeg);
     addToast({ type: 'success', message: `${angleDeg}° kilitlendi.` });
     setSelectedCornerIdx(null);
   };
@@ -270,15 +263,14 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
 
         {/* Angle constraint symbols */}
         {room.constraints.map((constraint) => {
-          const wallA = room.walls.find((w) => w.id === constraint.wallAId);
-          const wallB = room.walls.find((w) => w.id === constraint.wallBId);
-          if (!wallA || !wallB) return null;
+          const sharedIdx = constraint.sharedPointIndex;
+          const connectedWalls = room.walls.filter(
+            (w) => w.startPointIndex === sharedIdx || w.endPointIndex === sharedIdx
+          );
+          if (connectedWalls.length < 2) return null;
 
-          const aIndices = [wallA.startPointIndex, wallA.endPointIndex];
-          const bIndices = [wallB.startPointIndex, wallB.endPointIndex];
-          const sharedIdx = aIndices.find((i) => bIndices.includes(i));
-          if (sharedIdx === undefined) return null;
-
+          const wallA = connectedWalls[0];
+          const wallB = connectedWalls[1];
           const cornerPt = room.points[sharedIdx];
           const wallAOtherIdx = wallA.startPointIndex === sharedIdx ? wallA.endPointIndex : wallA.startPointIndex;
           const wallBOtherIdx = wallB.startPointIndex === sharedIdx ? wallB.endPointIndex : wallB.startPointIndex;

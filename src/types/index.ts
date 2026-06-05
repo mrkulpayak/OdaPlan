@@ -16,8 +16,7 @@ export type ConstraintType = 'angle';
 export interface Constraint {
   id: string;
   type: ConstraintType;
-  wallAId: string;
-  wallBId: string;
+  sharedPointIndex: number; // PRIMARY KEY: the corner point where the two walls meet
   angleDeg: number; // locked angle between the two walls in degrees
 }
 

@@ -20,7 +20,7 @@ interface PlanActions {
   updateWindow: (id: string, updates: Partial<Window>) => void;
   removeWindow: (id: string) => void;
   createRoomFromPoints: (points: Point[]) => void;
-  addAngleConstraint: (wallAId: string, wallBId: string, angleDeg: number) => void;
+  addAngleConstraint: (sharedPointIndex: number, angleDeg: number) => void;
   removeConstraint: (constraintId: string) => void;
   moveRoomPoint: (pointIndex: number, newPosCm: Point) => void;
   setCanvasState: (canvas: Partial<CanvasState>) => void;
@@ -234,14 +234,12 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         }));
       },
 
-      addAngleConstraint: (wallAId, wallBId, angleDeg) =>
+      addAngleConstraint: (sharedPointIndex, angleDeg) =>
         set((s) => {
           if (!s.room) return s;
-          // Remove existing constraint between these walls (replace with new angle)
-          const filtered = s.room.constraints.filter(
-            (c) => !((c.wallAId === wallAId && c.wallBId === wallBId) || (c.wallAId === wallBId && c.wallBId === wallAId))
-          );
-          const constraint = { id: makeId(), type: 'angle' as const, wallAId, wallBId, angleDeg };
+          // Replace any existing constraint at this corner
+          const filtered = s.room.constraints.filter((c) => c.sharedPointIndex !== sharedPointIndex);
+          const constraint = { id: makeId(), type: 'angle' as const, sharedPointIndex, angleDeg };
           return { room: { ...s.room, constraints: [...filtered, constraint] } };
         }),
 
@@ -266,75 +264,77 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           i === pointIndex ? newPosCm : p
         );
 
-        // Apply angle constraints: project the dragged point onto the direction that
-        // maintains the locked angle between the two walls meeting at the shared corner.
+        // Apply angle constraints.
+        // For each constraint, handle TWO cases:
+        //   Case A: User is dragging an ARM ENDPOINT (one of the two non-shared points).
+        //           → Project the dragged arm onto the direction that maintains the locked angle.
+        //   Case B: User is dragging the SHARED CORNER itself.
+        //           → Rigid body: translate both arm endpoints by the same delta.
         for (const c of state.room.constraints) {
-          const wallA = state.room.walls.find((w) => w.id === c.wallAId);
-          const wallB = state.room.walls.find((w) => w.id === c.wallBId);
-          if (!wallA || !wallB) continue;
+          const sharedIdx: number = c.sharedPointIndex;
+          const connectedWalls: typeof state.room.walls = state.room.walls.filter(
+            (w) => w.startPointIndex === sharedIdx || w.endPointIndex === sharedIdx
+          );
+          if (connectedWalls.length < 2) continue;
 
-          // Find shared corner index
-          const aEnds = [wallA.startPointIndex, wallA.endPointIndex];
-          const bEnds = [wallB.startPointIndex, wallB.endPointIndex];
-          const sharedIdx = aEnds.find((i) => bEnds.includes(i));
-          if (sharedIdx === undefined) continue;
+          const wallA: (typeof connectedWalls)[number] = connectedWalls[0];
+          const wallB: (typeof connectedWalls)[number] = connectedWalls[1];
+          const arm1Idx = wallA.startPointIndex === sharedIdx ? wallA.endPointIndex : wallA.startPointIndex;
+          const arm2Idx = wallB.startPointIndex === sharedIdx ? wallB.endPointIndex : wallB.startPointIndex;
 
-          const aOtherIdx = sharedIdx === wallA.startPointIndex ? wallA.endPointIndex : wallA.startPointIndex;
-          const bOtherIdx = sharedIdx === wallB.startPointIndex ? wallB.endPointIndex : wallB.startPointIndex;
-
-          const isEndOfA = pointIndex === aOtherIdx;
-          const isEndOfB = pointIndex === bOtherIdx;
-          if (!isEndOfA && !isEndOfB) continue;
-
-          const sharedPt = state.room.points[sharedIdx];
-          // Support legacy constraints that may lack angleDeg
           const angleDeg = c.angleDeg ?? 90;
           const angleRad = (angleDeg * Math.PI) / 180;
 
-          // Determine: fixed wall direction (the wall NOT being dragged)
-          // and current direction of the wall being dragged (to pick the right ±angle candidate)
-          let fixedUx: number, fixedUy: number;
-          let movingCurDx: number, movingCurDy: number;
+          if (pointIndex === sharedIdx) {
+            // ── Case B: shared corner drag → rigid body translate ──────────
+            const dX = newPoints[sharedIdx].x - state.room.points[sharedIdx].x;
+            const dY = newPoints[sharedIdx].y - state.room.points[sharedIdx].y;
+            newPoints[arm1Idx] = {
+              x: state.room.points[arm1Idx].x + dX,
+              y: state.room.points[arm1Idx].y + dY,
+            };
+            newPoints[arm2Idx] = {
+              x: state.room.points[arm2Idx].x + dX,
+              y: state.room.points[arm2Idx].y + dY,
+            };
+          } else if (pointIndex === arm1Idx || pointIndex === arm2Idx) {
+            // ── Case A: arm endpoint drag → project onto locked angle direction ──
+            const sharedPt = state.room.points[sharedIdx];
 
-          if (isEndOfA) {
-            const bOtherPt = state.room.points[bOtherIdx];
-            const bDx = bOtherPt.x - sharedPt.x;
-            const bDy = bOtherPt.y - sharedPt.y;
-            const bLen = Math.hypot(bDx, bDy);
-            if (bLen < 1) continue;
-            fixedUx = bDx / bLen; fixedUy = bDy / bLen;
-            const aPt = state.room.points[aOtherIdx];
-            movingCurDx = aPt.x - sharedPt.x;
-            movingCurDy = aPt.y - sharedPt.y;
-          } else {
-            const aOtherPt = state.room.points[aOtherIdx];
-            const aDx = aOtherPt.x - sharedPt.x;
-            const aDy = aOtherPt.y - sharedPt.y;
-            const aLen = Math.hypot(aDx, aDy);
-            if (aLen < 1) continue;
-            fixedUx = aDx / aLen; fixedUy = aDy / aLen;
-            const bPt = state.room.points[bOtherIdx];
-            movingCurDx = bPt.x - sharedPt.x;
-            movingCurDy = bPt.y - sharedPt.y;
+            // The "fixed" arm is the other one (not being dragged)
+            const fixedArmIdx = pointIndex === arm1Idx ? arm2Idx : arm1Idx;
+            const fixedArmPt  = state.room.points[fixedArmIdx];
+            const fDx = fixedArmPt.x - sharedPt.x;
+            const fDy = fixedArmPt.y - sharedPt.y;
+            const fLen = Math.hypot(fDx, fDy);
+            if (fLen < 1) continue;
+            const fixedUx = fDx / fLen;
+            const fixedUy = fDy / fLen;
+
+            // Current direction of the arm being dragged (to choose the right ±angle side)
+            const movingPt = state.room.points[pointIndex];
+            const movingCurDx = movingPt.x - sharedPt.x;
+            const movingCurDy = movingPt.y - sharedPt.y;
+
+            // Two candidate directions at ±angleDeg from fixed arm
+            const cos = Math.cos(angleRad), sin = Math.sin(angleRad);
+            const d1x = fixedUx * cos - fixedUy * sin;
+            const d1y = fixedUx * sin + fixedUy * cos;
+            const d2x = fixedUx * cos + fixedUy * sin;
+            const d2y = -fixedUx * sin + fixedUy * cos;
+
+            // Pick the candidate closest to the wall's current direction
+            const dot1 = d1x * movingCurDx + d1y * movingCurDy;
+            const dot2 = d2x * movingCurDx + d2y * movingCurDy;
+            const targetDirX = dot1 >= dot2 ? d1x : d2x;
+            const targetDirY = dot1 >= dot2 ? d1y : d2y;
+
+            // Project the desired new position onto this direction from the shared corner
+            const toNew = { x: newPosCm.x - sharedPt.x, y: newPosCm.y - sharedPt.y };
+            const t = Math.max(50, toNew.x * targetDirX + toNew.y * targetDirY);
+            newPoints[pointIndex] = { x: sharedPt.x + t * targetDirX, y: sharedPt.y + t * targetDirY };
           }
-
-          // Two candidate directions at ±angleDeg from fixed wall
-          const cos = Math.cos(angleRad), sin = Math.sin(angleRad);
-          const d1x = fixedUx * cos - fixedUy * sin;
-          const d1y = fixedUx * sin + fixedUy * cos;
-          const d2x = fixedUx * cos + fixedUy * sin;
-          const d2y = -fixedUx * sin + fixedUy * cos;
-
-          // Pick the candidate closest to the wall's current direction
-          const dot1 = d1x * movingCurDx + d1y * movingCurDy;
-          const dot2 = d2x * movingCurDx + d2y * movingCurDy;
-          const targetDirX = dot1 >= dot2 ? d1x : d2x;
-          const targetDirY = dot1 >= dot2 ? d1y : d2y;
-
-          // Project the desired new position onto this direction from the shared corner
-          const toNew = { x: newPosCm.x - sharedPt.x, y: newPosCm.y - sharedPt.y };
-          const t = Math.max(50, toNew.x * targetDirX + toNew.y * targetDirY);
-          newPoints[pointIndex] = { x: sharedPt.x + t * targetDirX, y: sharedPt.y + t * targetDirY };
+          // If neither arm nor shared → this constraint doesn't affect this drag, skip.
         }
 
         // --- Move wall-snapped furniture with the wall ---
