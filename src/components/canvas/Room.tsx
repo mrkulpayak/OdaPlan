@@ -662,15 +662,10 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
             transform: `scale(${1 / zoom})`,
             transformOrigin: 'top left',
             width: '160px',
-            background: '#fff',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-            padding: '8px',
             fontFamily: 'var(--font-body)',
           }}>
             {/* Label row */}
-            <div style={{ fontSize: '10px', color: '#888', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>Köşe açısı</span>
               {cornerExistingConstraint && (
                 <span style={{ color: '#555', fontWeight: 600 }}>
@@ -690,6 +685,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
                   width: '52px',
                   fontFamily: 'var(--font-mono)',
                   fontSize: '12px',
+                  background: '#f0f0f0',
                   border: '1px solid #ccc',
                   borderRadius: '3px',
                   padding: '3px 5px',
@@ -708,9 +704,11 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
                   color: '#333',
                   border: '1px solid #ccc',
                   borderRadius: '3px',
-                  padding: '4px 6px',
+                  padding: '4px 8px',
                   cursor: 'pointer',
                   whiteSpace: 'nowrap',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+                  height: '26px',
                 }}
               >
                 Kilitle
@@ -726,9 +724,11 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
                     color: '#333',
                     border: '1px solid #ccc',
                     borderRadius: '3px',
-                    padding: '4px 6px',
+                    padding: '4px 8px',
                     cursor: 'pointer',
                     whiteSpace: 'nowrap',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+                    height: '26px',
                   }}
                 >
                   Aç
