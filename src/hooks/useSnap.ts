@@ -171,20 +171,16 @@ export function computeSnap(
   }
   if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
 
-  // ── Priority 2: wall snap (translate + rotate flush) ─────────────────────
+  // ── Priority 2: wall/column snap + furniture-to-furniture snap (compete together) ─
   //
-  // Algorithm:
-  //   For each wall × each face:
-  //   1. Measure distance from the CURRENT-rotation face midpoint to the wall.
-  //      (This is the trigger: "how close is this face to this wall right now?")
-  //   2. If within snap distance and best so far:
-  //      a. Compute the exact rotation needed for this face to be flush.
-  //      b. Re-compute the face midpoint at the NEW rotation.
-  //      c. Find the nearest point on the wall to the new midpoint.
-  //      d. Offset the furniture so the new midpoint lands on the wall point.
+  // Wall/column snap:
+  //   For each snap segment (room wall or column face) × each furniture face:
+  //   1. Measure distance from the CURRENT-rotation face midpoint to the segment.
+  //   2. If within SNAP_DISTANCE_CM and best so far, compute flush rotation and snap.
   //
-  // Result: the face that was approaching the wall gets rotated flush, then
-  // positioned so it's exactly on the wall.
+  // Furniture-to-furniture snap uses a SHORTER threshold (FURN_SNAP = SNAP_DISTANCE_CM/2)
+  // so it only fires when very close. Both compete: the smaller distance wins.
+  // ──────────────────────────────────────────────────────────────────────────────
   const mids = rotatedSideMidpoints(pos, w, d, currentRotation);
   const sideEntries = Object.entries(mids) as Array<[FurnitureFrontSide, { x: number; y: number }]>;
 
@@ -239,12 +235,11 @@ export function computeSnap(
       };
     }
   }
-  if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
 
-  // ── Priority 3: furniture-to-furniture snap ───────────────────────────────
-  // Check perpendicular gap between facing sides + any parallel overlap.
-  // Works for axis-aligned furniture (rotation 0° or 90°).
-  const FURN_SNAP = SNAP_DISTANCE_CM;
+  // ── Furniture-to-furniture snap (shorter threshold, competes with wall/column snap) ─
+  // Uses axis-aligned bounding boxes — works correctly when rotation=0 or 90°.
+  // Threshold is half of SNAP_DISTANCE_CM so it wins only when very close to another item.
+  const FURN_SNAP = SNAP_DISTANCE_CM / 2;
   for (const other of otherInstances) {
     const otherItem = otherItems.get(other.catalogItemId);
     if (!otherItem) continue;
@@ -286,7 +281,8 @@ export function computeSnap(
       }
     }
   }
-  if (bestResult && bestDist <= FURN_SNAP) return bestResult;
+
+  if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
 
   // No snap — preserve current position and rotation
   return { position: pos, rotation: currentRotation, guideLines: [] };

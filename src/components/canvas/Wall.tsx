@@ -2,8 +2,6 @@ import { memo } from 'react';
 import type { Wall as WallType, Point, Door as DoorType, Window as WindowType } from '../../types';
 import { cmToPx, segmentLength } from '../../lib/geometry';
 import { DimensionLabel } from './DimensionLabel';
-import { Door } from './Door';
-import { WindowComp } from './Window';
 
 interface Props {
   wall: WallType;
@@ -16,15 +14,17 @@ interface Props {
   onCommitLength: (wallId: string, newLengthCm: number) => void;
   onToggleLock: (wallId: string) => void;
   onTogglePin: (wallId: string) => void;
-  onSelectDoor: (id: string) => void;
-  onSelectWindow: (id: string) => void;
+  /** Kept for API compatibility — Door/Window components render in Room.tsx overlay */
+  onSelectDoor?: (id: string) => void;
+  /** Kept for API compatibility — Door/Window components render in Room.tsx overlay */
+  onSelectWindow?: (id: string) => void;
   onWallClick: (wallId: string, e: React.PointerEvent) => void;
   isDraggable?: boolean;
 }
 
 export const Wall = memo(function Wall({
   wall, points, doors, windows, viewRotation, zoom, isSelected,
-  onCommitLength, onToggleLock, onTogglePin, onSelectDoor, onSelectWindow, onWallClick, isDraggable,
+  onCommitLength, onToggleLock, onTogglePin, onWallClick, isDraggable,
 }: Props) {
   const aCm = points[wall.startPointIndex];
   const bCm = points[wall.endPointIndex];
@@ -97,13 +97,8 @@ export const Wall = memo(function Wall({
         />
       ))}
 
-      {doors.map((door) => (
-        <Door key={door.id} door={door} wallStart={aCm} wallEnd={bCm} onSelect={onSelectDoor} />
-      ))}
-
-      {windows.map((win) => (
-        <WindowComp key={win.id} window={win} wallStart={aCm} wallEnd={bCm} onSelect={onSelectWindow} />
-      ))}
+      {/* Note: Door and Window components are rendered in Room.tsx AFTER furniture
+          so they appear on top. Wall only draws the gap in the wall line here. */}
 
       <DimensionLabel
         wallId={wall.id}

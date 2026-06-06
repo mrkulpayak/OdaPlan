@@ -2,6 +2,8 @@ import { memo, useRef, useState, useCallback, useEffect } from 'react';
 import type { Room as RoomType, Point, Wall as WallType } from '../../types';
 import { cmToPx, pxToCm } from '../../lib/geometry';
 import { Wall } from './Wall';
+import { Door } from './Door';
+import { WindowComp } from './Window';
 import { FurnitureItem } from './FurnitureItem';
 import { ColumnItem } from './ColumnItem';
 import { CustomShapeItem } from './CustomShapeItem';
@@ -453,6 +455,22 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
         {(customShapeInstances ?? []).map((cs) => (
           <CustomShapeItem key={cs.id} instance={cs} zoom={zoom} />
         ))}
+
+        {/* ── Door & Window overlay — rendered AFTER furniture so they appear on top ── */}
+        {room.walls.map((wall) => {
+          const aCm = room.points[wall.startPointIndex];
+          const bCm = room.points[wall.endPointIndex];
+          return (
+            <g key={`dw-${wall.id}`}>
+              {room.doors.filter((d) => d.wallId === wall.id).map((door) => (
+                <Door key={door.id} door={door} wallStart={aCm} wallEnd={bCm} onSelect={setSelectedItemId} />
+              ))}
+              {room.windows.filter((w) => w.wallId === wall.id).map((win) => (
+                <WindowComp key={win.id} window={win} wallStart={aCm} wallEnd={bCm} onSelect={setSelectedItemId} />
+              ))}
+            </g>
+          );
+        })}
       </g>
 
       {/* Corner-tap angle lock popup
