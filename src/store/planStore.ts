@@ -70,7 +70,7 @@ const defaultCanvas: CanvasState = {
   showDimensionsOnExport: true,
   furnitureColor: '#f5f0e8',
   floorColor: '#e8dcc8',   // açık parke
-  showGrid: false,
+  showGrid: true,
   snapEnabled: true,
   wallsLocked: false,
 };
