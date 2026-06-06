@@ -41,7 +41,8 @@ export function ColorPickerPopover({
     };
   }, [onClose]);
 
-  const left  = Math.max(8, anchorRect.left);
+  const POPOVER_W = 220;
+  const left  = Math.min(Math.max(8, anchorRect.left), window.innerWidth - POPOVER_W - 8);
   const top   = anchorRect.bottom + 6;
 
   return createPortal(

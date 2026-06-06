@@ -1,11 +1,24 @@
 import { useEffect, useState } from 'react';
 
+import type { FurnitureFrontSide } from '../../types';
+
+/** Screen-angle offset so the indicator line points toward the front face.
+ *  At rotation=0: bottom→90°, top→270°, left→180°, right→0° in SVG polar space. */
+const FACE_ANGLE_OFFSET: Record<FurnitureFrontSide, number> = {
+  bottom: 90,
+  top:    270,
+  left:   180,
+  right:  0,
+};
+
 interface Props {
   cx: number;
   cy: number;
   currentAngle: number;
   /** Angle when radial menu was first opened — used to show delta */
   originalAngle: number;
+  /** Which face is the front — indicator line points toward this face */
+  frontSide?: FurnitureFrontSide;
   zoom: number;
   onAngleChange: (snappedAngle: number) => void;
   onConfirm: () => void;
@@ -54,7 +67,8 @@ function polarToXY(cx: number, cy: number, r: number, angleDeg: number) {
 const ZONE_HIGHLIGHT = 'rgba(59,130,246,0.12)'; // subtle blue tint
 
 export function RadialRotateMenu({
-  cx, cy, currentAngle, originalAngle, zoom, onAngleChange, onConfirm, onCancel,
+  cx, cy, currentAngle, originalAngle, frontSide = 'bottom', zoom,
+  onAngleChange, onConfirm, onCancel,
 }: Props) {
   const r0 = RADIAL_R0 / zoom;
   const r1 = R1 / zoom;
@@ -95,8 +109,9 @@ export function RadialRotateMenu({
     };
   }, [zoom, onAngleChange, onConfirm, onCancel]);
 
-  // Angle indicator line
-  const tip = polarToXY(cx, cy, r3 + 4 / zoom, currentAngle);
+  // Angle indicator line — points toward the front face of the furniture
+  const faceAngle = (currentAngle + FACE_ANGLE_OFFSET[frontSide]) % 360;
+  const tip = polarToXY(cx, cy, r3 + 4 / zoom, faceAngle);
   const fs  = Math.max(8, 10 / zoom);
 
   // Delta rotation (normalized to -180..180)

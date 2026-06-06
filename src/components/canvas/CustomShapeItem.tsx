@@ -186,14 +186,21 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
   const handleDimChange = useCallback((key: string, raw: string) => {
     const v = parseFloat(raw);
     if (!Number.isNaN(v) && v >= 5) {
-      setEditDims((prev) => ({ ...prev, [key]: v }));
+      setEditDims((prev) => {
+        const next = { ...prev, [key]: v };
+        // Live preview: update the shape in real-time
+        updateCustomShapeInstance(instance.id, { dims: next });
+        return next;
+      });
     }
-  }, []);
+  }, [instance.id, updateCustomShapeInstance]);
 
   // ── Dimension editor foreignObject ────────────────────────────
   const editorW = 200;   // px (at zoom=1)
   const editorH = DIM_KEYS[instance.shapeType].length * 36 + 72;
-  const editorX = wPx / 2 - editorW / 2;
+  // Center the editor on the shape (both axes)
+  const editorX = wPx / 2 - editorW / (2 * zoom);
+  const editorY = hPx / 2 - editorH / (2 * zoom);
 
   const annotations = shapeEdgeAnnotations(instance.shapeType, instance.dims);
   const labelOffset = 14; // px offset from edge midpoint
@@ -244,8 +251,8 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
         </text>
       )}
 
-      {/* Edge dimension labels (only when selected, not editing) */}
-      {isSelected && !isEditing && annotations.map((ann) => (
+      {/* Edge dimension labels (when selected — including while editing for live feedback) */}
+      {isSelected && annotations.map((ann) => (
         <g key={ann.dimKey} style={{ pointerEvents: 'none' }}>
           <text
             x={cmToPx(ann.mx) + ann.nx * labelOffset / zoom}
@@ -284,7 +291,7 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
         <foreignObject
           data-interactive="true"
           x={editorX}
-          y={-editorH / zoom - 8 / zoom}
+          y={editorY}
           width={editorW / zoom}
           height={editorH / zoom}
           style={{ overflow: 'visible', pointerEvents: 'auto' }}

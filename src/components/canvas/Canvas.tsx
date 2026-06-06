@@ -141,37 +141,43 @@ export const Canvas = memo(function Canvas() {
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
       >
-        {/* Grid pattern defined at SVG root (outside transforms so it works in all browsers) */}
-        {canvas.showGrid && (
-          <defs>
-            {/* 50 cm = 200 px in room-space. The rect below is inside the scale(zoom) group,
-                so patternUnits="userSpaceOnUse" expresses the tile in room-pixel units. */}
-            <pattern id="grid-50cm" x={panX % (200 * zoom)} y={panY % (200 * zoom)}
-              width={200 * zoom} height={200 * zoom}
-              patternUnits="userSpaceOnUse">
-              <path
-                d={`M ${200 * zoom} 0 L 0 0 0 ${200 * zoom}`}
-                fill="none"
-                stroke="rgba(0,0,0,0.18)"
-                strokeWidth="1"
+        {/* Grid pattern — defined at SVG root in screen-pixel space.
+            patternUnits="userSpaceOnUse" means x/y/width/height are screen pixels.
+            The offset (panX % tileSize) keeps the grid locked to world-space as the user pans.
+            The rect that fills the grid is also at root level (outside any transform) so both
+            the pattern and the rect live in the same coordinate system — no speed mismatch. */}
+        {canvas.showGrid && (() => {
+          const tile = 200 * zoom; // 50cm in screen pixels
+          const ox = ((panX % tile) + tile) % tile; // always positive modulo
+          const oy = ((panY % tile) + tile) % tile;
+          return (
+            <>
+              <defs>
+                <pattern id="grid-50cm" x={ox} y={oy}
+                  width={tile} height={tile}
+                  patternUnits="userSpaceOnUse">
+                  <path
+                    d={`M ${tile} 0 L 0 0 0 ${tile}`}
+                    fill="none"
+                    stroke="rgba(0,0,0,0.16)"
+                    strokeWidth="1"
+                  />
+                </pattern>
+              </defs>
+              {/* Rect at SVG root level — same coordinate system as the pattern */}
+              <rect
+                x={0} y={0}
+                width={svgSize.w} height={svgSize.h}
+                fill="url(#grid-50cm)"
+                style={{ pointerEvents: 'none' }}
               />
-            </pattern>
-          </defs>
-        )}
+            </>
+          );
+        })()}
 
         {/* Rotation around canvas center, then pan + zoom */}
         <g transform={`rotate(${viewRotation}, ${cx}, ${cy})`}>
           <g transform={`translate(${panX}, ${panY}) scale(${zoom})`}>
-
-            {/* ── 50 cm grid overlay (rect covers entire visible area in room-px space) ── */}
-            {canvas.showGrid && (
-              <rect
-                x={-panX / zoom - 2000} y={-panY / zoom - 2000}
-                width={svgSize.w / zoom + 4000} height={svgSize.h / zoom + 4000}
-                fill="url(#grid-50cm)"
-                style={{ pointerEvents: 'none' }}
-              />
-            )}
 
             {room && (
               <Room room={room} viewRotation={viewRotation} zoom={zoom} canvasRef={svgRef} />

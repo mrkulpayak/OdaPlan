@@ -1,6 +1,7 @@
 import { memo, useRef, useState, useCallback } from 'react';
 import { cmToPx } from '../../lib/geometry';
 import { RadialRotateMenu, RADIAL_R0 } from './RadialRotateMenu';
+import type { FurnitureFrontSide } from '../../types';
 
 interface Props {
   widthCm: number;
@@ -8,6 +9,8 @@ interface Props {
   /** Current rotation in degrees — needed to counter-rotate the overlay */
   rotation: number;
   zoom: number;
+  /** Which side is the "front" — used to draw the front-face indicator line during rotation */
+  frontSide?: FurnitureFrontSide;
   onStartMoveDrag: (e: React.PointerEvent) => void;
   onRotate90: () => void;
   onRotateToAngle: (angle: number) => void;
@@ -18,7 +21,7 @@ interface Props {
 const HOLD_MS = 350;   // ms before radial menu opens
 
 export const SelectionHandles = memo(function SelectionHandles({
-  widthCm, depthCm, rotation, zoom,
+  widthCm, depthCm, rotation, zoom, frontSide = 'bottom',
   onStartMoveDrag, onRotate90, onRotateToAngle, onDelete, onDuplicate,
 }: Props) {
   const w = cmToPx(widthCm);
@@ -186,6 +189,7 @@ export const SelectionHandles = memo(function SelectionHandles({
             cy={cy}
             currentAngle={radialAngle}
             originalAngle={originalAngle.current}
+            frontSide={frontSide}
             zoom={zoom}
             onAngleChange={handleRadialAngleChange}
             onConfirm={handleRadialConfirm}

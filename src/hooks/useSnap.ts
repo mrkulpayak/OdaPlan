@@ -1,6 +1,6 @@
 import { SNAP_DISTANCE_CM } from '../lib/constants';
 import { distancePointToSegment, closestPointOnSegment } from '../lib/geometry';
-import type { Room, FurnitureInstance, FurnitureCatalogItem, FurnitureFrontSide } from '../types';
+import type { Room, FurnitureInstance, FurnitureCatalogItem, FurnitureFrontSide, Column } from '../types';
 
 export interface SnapResult {
   position: { x: number; y: number };
@@ -91,6 +91,41 @@ function flushRotations(nx: number, ny: number): Record<FurnitureFrontSide, numb
 }
 
 /**
+ * Generate the 4 outer face segments of a (possibly rotated) column.
+ * Each face is oriented so its computed normal (nx=-uy, ny=ux) points OUTWARD
+ * from the column center — matching the convention expected by flushRotations.
+ */
+function columnFaceSegments(col: Column): Array<{ a: { x: number; y: number }; b: { x: number; y: number } }> {
+  const cx = col.position.x + col.widthCm / 2;
+  const cy = col.position.y + col.depthCm / 2;
+  const hw = col.widthCm / 2;
+  const hd = col.depthCm / 2;
+  const θ = (col.rotation * Math.PI) / 180;
+  const cos = Math.cos(θ);
+  const sin = Math.sin(θ);
+  const rot = (dx: number, dy: number) => ({
+    x: cx + dx * cos - dy * sin,
+    y: cy + dx * sin + dy * cos,
+  });
+  // Corners
+  const tl = rot(-hw, -hd);
+  const tr = rot( hw, -hd);
+  const br = rot( hw,  hd);
+  const bl = rot(-hw,  hd);
+  // Face segments ordered so normal (nx=-uy, ny=ux) points OUTWARD:
+  // Top: tr→tl  → ux=-1,uy=0 → nx=0,ny=-1 (upward) ✓
+  // Right: br→tr → ux=0,uy=-1 → nx=1,ny=0 (rightward) ✓
+  // Bottom: bl→br → ux=1,uy=0 → nx=0,ny=1 (downward) ✓
+  // Left: tl→bl → ux=0,uy=1 → nx=-1,ny=0 (leftward) ✓
+  return [
+    { a: tr, b: tl },
+    { a: br, b: tr },
+    { a: bl, b: br },
+    { a: tl, b: bl },
+  ];
+}
+
+/**
  * Main snap computation.
  *
  * Priority 1 — corner snap  : rotated furniture corner → room corner (translate only, no rotation change)
@@ -153,15 +188,27 @@ export function computeSnap(
   const mids = rotatedSideMidpoints(pos, w, d, currentRotation);
   const sideEntries = Object.entries(mids) as Array<[FurnitureFrontSide, { x: number; y: number }]>;
 
-  for (const wall of room.walls) {
-    const a = room.points[wall.startPointIndex];
-    const b = room.points[wall.endPointIndex];
-    const wallLen = Math.hypot(b.x - a.x, b.y - a.y);
-    if (wallLen < 1) continue;
+  // Build list of snap segments: room walls + column faces
+  type SnapSeg = { a: { x: number; y: number }; b: { x: number; y: number }; wallId?: string };
+  const snapSegs: SnapSeg[] = [
+    ...room.walls.map((wall) => ({
+      a: room.points[wall.startPointIndex],
+      b: room.points[wall.endPointIndex],
+      wallId: wall.id,
+    })),
+    ...(room.columns ?? []).flatMap((col) =>
+      columnFaceSegments(col).map((seg) => ({ ...seg, wallId: undefined }))
+    ),
+  ];
 
-    const ux = (b.x - a.x) / wallLen;
-    const uy = (b.y - a.y) / wallLen;
-    const nx = -uy; // inward normal
+  for (const seg of snapSegs) {
+    const { a, b } = seg;
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    if (segLen < 1) continue;
+
+    const ux = (b.x - a.x) / segLen;
+    const uy = (b.y - a.y) / segLen;
+    const nx = -uy;
     const ny =  ux;
 
     const reqRot = flushRotations(nx, ny);
@@ -170,23 +217,16 @@ export function computeSnap(
       const dist = distancePointToSegment(midpoint, a, b);
       if (dist >= bestDist || dist > SNAP_DISTANCE_CM) continue;
 
-      // New rotation that makes this face flush with the wall
       const newRotation = reqRot[side];
-
-      // Face midpoint at the new rotation
       const newMids = rotatedSideMidpoints(pos, w, d, newRotation);
       const newMid  = newMids[side];
+      const wallPt  = closestPointOnSegment(newMid, a, b);
 
-      // Nearest point on wall to the (new-rotation) face midpoint
-      const wallPt = closestPointOnSegment(newMid, a, b);
-
-      // Face midpoint offset from furniture visual center at new rotation
       const cx = pos.x + w / 2;
       const cy = pos.y + d / 2;
       const rdx = newMid.x - cx;
       const rdy = newMid.y - cy;
 
-      // Move center so the face midpoint lands exactly on wallPt
       const newCenter  = { x: wallPt.x - rdx, y: wallPt.y - rdy };
       const snappedPos = { x: newCenter.x - w / 2, y: newCenter.y - d / 2 };
 
@@ -194,7 +234,7 @@ export function computeSnap(
       bestResult = {
         position:  snappedPos,
         rotation:  newRotation,
-        snappedTo: { wallId: wall.id, side },
+        snappedTo: seg.wallId ? { wallId: seg.wallId, side } : undefined,
         guideLines: [{ x1: a.x, y1: a.y, x2: b.x, y2: b.y }],
       };
     }
@@ -202,8 +242,9 @@ export function computeSnap(
   if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
 
   // ── Priority 3: furniture-to-furniture snap ───────────────────────────────
-  // Use half the wall snap threshold so furniture-to-furniture is a tighter magnet.
-  const FURN_SNAP = SNAP_DISTANCE_CM / 2;
+  // Check perpendicular gap between facing sides + any parallel overlap.
+  // Works for axis-aligned furniture (rotation 0° or 90°).
+  const FURN_SNAP = SNAP_DISTANCE_CM;
   for (const other of otherInstances) {
     const otherItem = otherItems.get(other.catalogItemId);
     if (!otherItem) continue;
@@ -211,18 +252,37 @@ export function computeSnap(
     const od = otherItem.depthCm;
     const op = other.position;
 
-    const checks: Array<[number, number, number, number, { x: number; y: number }]> = [
-      [pos.x + w,   pos.y + d / 2, op.x,        op.y + od / 2, { x: op.x - w,  y: pos.y }],
-      [pos.x,       pos.y + d / 2, op.x + ow,   op.y + od / 2, { x: op.x + ow, y: pos.y }],
-      [pos.x + w/2, pos.y + d,     op.x + ow/2, op.y,          { x: pos.x,     y: op.y - d }],
-      [pos.x + w/2, pos.y,         op.x + ow/2, op.y + od,     { x: pos.x,     y: op.y + od }],
-    ];
+    // Horizontal snaps: check perpendicular (x) gap and vertical (y) overlap
+    const yOverlap = Math.min(pos.y + d, op.y + od) - Math.max(pos.y, op.y);
+    if (yOverlap > -FURN_SNAP) {
+      // Right of dragged → Left of other
+      const gapR = Math.abs((pos.x + w) - op.x);
+      if (gapR < FURN_SNAP && gapR < bestDist) {
+        bestDist   = gapR;
+        bestResult = { position: { x: op.x - w, y: pos.y }, rotation: currentRotation, guideLines: [] };
+      }
+      // Left of dragged → Right of other
+      const gapL = Math.abs(pos.x - (op.x + ow));
+      if (gapL < FURN_SNAP && gapL < bestDist) {
+        bestDist   = gapL;
+        bestResult = { position: { x: op.x + ow, y: pos.y }, rotation: currentRotation, guideLines: [] };
+      }
+    }
 
-    for (const [mx, my, ox, oy, snappedPos] of checks) {
-      const dist = Math.hypot(mx - ox, my - oy);
-      if (dist < FURN_SNAP && dist < bestDist) {
-        bestDist   = dist;
-        bestResult = { position: snappedPos, rotation: currentRotation, guideLines: [] };
+    // Vertical snaps: check perpendicular (y) gap and horizontal (x) overlap
+    const xOverlap = Math.min(pos.x + w, op.x + ow) - Math.max(pos.x, op.x);
+    if (xOverlap > -FURN_SNAP) {
+      // Bottom of dragged → Top of other
+      const gapB = Math.abs((pos.y + d) - op.y);
+      if (gapB < FURN_SNAP && gapB < bestDist) {
+        bestDist   = gapB;
+        bestResult = { position: { x: pos.x, y: op.y - d }, rotation: currentRotation, guideLines: [] };
+      }
+      // Top of dragged → Bottom of other
+      const gapT = Math.abs(pos.y - (op.y + od));
+      if (gapT < FURN_SNAP && gapT < bestDist) {
+        bestDist   = gapT;
+        bestResult = { position: { x: pos.x, y: op.y + od }, rotation: currentRotation, guideLines: [] };
       }
     }
   }

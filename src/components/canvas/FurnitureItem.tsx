@@ -112,10 +112,46 @@ export const FurnitureItem = memo(function FurnitureItem({ instance, catalogItem
         </text>
       )}
 
+      {/* Dimension labels inside furniture bounds when selected */}
+      {isSelected && (
+        <g style={{ pointerEvents: 'none' }}>
+          <text
+            x={w / 2}
+            y={8 / zoom}
+            textAnchor="middle"
+            dominantBaseline="hanging"
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: `${10 / zoom}px`,
+              fill: 'var(--color-primary)',
+              fontWeight: 600,
+            }}
+          >
+            {Math.round(catalogItem.widthCm)} cm
+          </text>
+          <text
+            x={w - 8 / zoom}
+            y={d / 2}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            transform={`rotate(-90, ${w - 8 / zoom}, ${d / 2})`}
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: `${10 / zoom}px`,
+              fill: 'var(--color-primary)',
+              fontWeight: 600,
+            }}
+          >
+            {Math.round(catalogItem.depthCm)} cm
+          </text>
+        </g>
+      )}
+
       {isSelected && (
         <SelectionHandles
           widthCm={catalogItem.widthCm}
           depthCm={catalogItem.depthCm}
+          frontSide={catalogItem.frontSide}
           rotation={instance.rotation}
           zoom={zoom}
           onStartMoveDrag={handleStartMove}
