@@ -105,7 +105,7 @@ export const SelectionHandles = memo(function SelectionHandles({
       */}
       <g transform={`rotate(${-rotation}, ${cx}, ${cy})`}>
 
-        {/* ── Rotate button (center) ── */}
+        {/* ── Rotate button (center) — RotateCw (lucide) ── */}
         <g
           transform={`translate(${cx}, ${cy})`}
           style={{ cursor: 'pointer' }}
@@ -115,42 +115,16 @@ export const SelectionHandles = memo(function SelectionHandles({
           aria-label="Döndür"
         >
           <circle r={BTN_R} fill="rgba(255,255,255,0.88)" stroke="rgba(0,0,0,0.18)" strokeWidth={BTN_R * 0.06} />
-          {(() => {
-            const ir  = BTN_R * 0.46;
-            const sw2 = Math.max(0.8, BTN_R * 0.13);
-            const col = 'rgba(0,0,0,0.65)';
-            const sx = ir, sy = 0;
-            const ex = 0,  ey = -ir;
-            const ms = BTN_R * 0.36;
-            const markerId = `rot-arr-${widthCm}-${depthCm}`;
-            return (
-              <>
-                <defs>
-                  <marker
-                    id={markerId}
-                    markerWidth={ms} markerHeight={ms}
-                    refX={ms * 0.75} refY={ms * 0.5}
-                    orient="auto"
-                    markerUnits="userSpaceOnUse"
-                  >
-                    <path
-                      d={`M 0 ${ms * 0.08} L ${ms * 0.75} ${ms * 0.5} L 0 ${ms * 0.92}`}
-                      fill="none" stroke={col} strokeWidth={sw2}
-                      strokeLinecap="round" strokeLinejoin="round"
-                    />
-                  </marker>
-                </defs>
-                <path
-                  d={`M ${sx} ${sy} A ${ir} ${ir} 0 1 1 ${ex} ${ey}`}
-                  fill="none" stroke={col} strokeWidth={sw2} strokeLinecap="round"
-                  markerEnd={`url(#${markerId})`}
-                />
-              </>
-            );
-          })()}
+          {/* lucide RotateCw — 24×24 viewBox scaled to fit circle */}
+          <g transform={`scale(${BTN_R * 1.1 / 24}) translate(-12,-12)`}
+            fill="none" stroke="rgba(0,0,0,0.65)" strokeWidth={2.2}
+            strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }}>
+            <polyline points="23 4 23 10 17 10" />
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+          </g>
         </g>
 
-        {/* ── Delete button (right of center) ── */}
+        {/* ── Delete button (right of center) — Trash2 (lucide) ── */}
         <g
           transform={`translate(${cx + BTN_GAP}, ${cy})`}
           style={{ cursor: 'pointer' }}
@@ -159,13 +133,18 @@ export const SelectionHandles = memo(function SelectionHandles({
           aria-label="Sil"
         >
           <circle r={BTN_R} fill="rgba(255,255,255,0.88)" stroke="rgba(0,0,0,0.18)" strokeWidth={BTN_R * 0.06} />
-          <line x1={-BTN_R * 0.38} y1={-BTN_R * 0.38} x2={BTN_R * 0.38} y2={BTN_R * 0.38}
-            stroke="rgba(0,0,0,0.65)" strokeWidth={BTN_R * 0.13} strokeLinecap="round" />
-          <line x1={BTN_R * 0.38}  y1={-BTN_R * 0.38} x2={-BTN_R * 0.38} y2={BTN_R * 0.38}
-            stroke="rgba(0,0,0,0.65)" strokeWidth={BTN_R * 0.13} strokeLinecap="round" />
+          {/* lucide Trash2 — 24×24 viewBox scaled to fit circle */}
+          <g transform={`scale(${BTN_R * 1.1 / 24}) translate(-12,-12)`}
+            fill="none" stroke="rgba(0,0,0,0.65)" strokeWidth={2.2}
+            strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }}>
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            <line x1="10" y1="11" x2="10" y2="17" />
+            <line x1="14" y1="11" x2="14" y2="17" />
+          </g>
         </g>
 
-        {/* ── Duplicate button (left of center) ── */}
+        {/* ── Duplicate button (left of center) — Copy (lucide) ── */}
         <g
           transform={`translate(${cx - BTN_GAP}, ${cy})`}
           style={{ cursor: 'pointer' }}
@@ -174,10 +153,13 @@ export const SelectionHandles = memo(function SelectionHandles({
           aria-label="Kopyala"
         >
           <circle r={BTN_R} fill="rgba(255,255,255,0.88)" stroke="rgba(0,0,0,0.18)" strokeWidth={BTN_R * 0.06} />
-          <rect x={-BTN_R * 0.38} y={-BTN_R * 0.38} width={BTN_R * 0.52} height={BTN_R * 0.52} rx={BTN_R * 0.07}
-            fill="rgba(255,255,255,0.7)" stroke="rgba(0,0,0,0.65)" strokeWidth={BTN_R * 0.1} />
-          <rect x={-BTN_R * 0.14} y={-BTN_R * 0.14} width={BTN_R * 0.52} height={BTN_R * 0.52} rx={BTN_R * 0.07}
-            fill="rgba(255,255,255,0.88)" stroke="rgba(0,0,0,0.65)" strokeWidth={BTN_R * 0.1} />
+          {/* lucide Copy — 24×24 viewBox scaled to fit circle */}
+          <g transform={`scale(${BTN_R * 1.1 / 24}) translate(-12,-12)`}
+            fill="none" stroke="rgba(0,0,0,0.65)" strokeWidth={2.2}
+            strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }}>
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </g>
         </g>
       </g>
 
