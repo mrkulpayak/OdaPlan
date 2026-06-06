@@ -235,6 +235,8 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
     const startPosX = pos.x;
     const startPosY = pos.y;
 
+    const colId = column.id;
+
     const onMove = (ev: PointerEvent) => {
       const { canvas: cv, room: currentRoom } = usePlanStore.getState();
       const rr = canvasSvg.getBoundingClientRect();
@@ -242,11 +244,24 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
       const cmY = pxToCm((ev.clientY - rr.top - cv.panY) / cv.zoom);
       const rawPos = { x: startPosX + cmX - startCmX, y: startPosY + cmY - startCmY };
 
-      if (!currentRoom) { updateColumn(column.id, { position: rawPos, snappedToWall: undefined }); return; }
+      if (!currentRoom) { updateColumn(colId, { position: rawPos, snappedToWall: undefined }); return; }
+
+      // Read current column state from store so snap uses up-to-date dimensions/rotation,
+      // NOT stale closure values (snap can change rotation, causing flicker if stale).
+      const liveCol = (currentRoom.columns ?? []).find(c => c.id === colId);
+      const liveWidthCm  = liveCol?.widthCm  ?? column.widthCm;
+      const liveDepthCm  = liveCol?.depthCm  ?? column.depthCm;
+      const liveRotation = liveCol?.rotation ?? column.rotation;
+
+      // Exclude self from columns so computeSnap doesn't snap the column to its own faces
+      const roomForSnap = {
+        ...currentRoom,
+        columns: (currentRoom.columns ?? []).filter(c => c.id !== colId),
+      };
 
       // Use the same snap logic as furniture (computeSnap)
-      const fakeItem = { widthCm: column.widthCm, depthCm: column.depthCm } as FurnitureCatalogItem;
-      let snapResult = computeSnap(rawPos, fakeItem, currentRoom, [], new Map(), column.rotation);
+      const fakeItem = { widthCm: liveWidthCm, depthCm: liveDepthCm } as FurnitureCatalogItem;
+      let snapResult = computeSnap(rawPos, fakeItem, roomForSnap, [], new Map(), liveRotation);
 
       // Corner along-wall snap: when wall-snapped, additionally snap column edge to wall endpoint
       if (snapResult.snappedTo) {
@@ -259,10 +274,10 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
           if (wLen > 1) {
             const ux = (wB.x - wA.x) / wLen;
             const uy = (wB.y - wA.y) / wLen;
-            const cx = snapResult.position.x + column.widthCm / 2;
-            const cy = snapResult.position.y + column.depthCm / 2;
+            const cx = snapResult.position.x + liveWidthCm / 2;
+            const cy = snapResult.position.y + liveDepthCm / 2;
             const tAlong = (cx - wA.x) * ux + (cy - wA.y) * uy;
-            const halfW = (side === 'top' || side === 'bottom') ? column.widthCm / 2 : column.depthCm / 2;
+            const halfW = (side === 'top' || side === 'bottom') ? liveWidthCm / 2 : liveDepthCm / 2;
             const leftT = tAlong - halfW;
             const rightT = tAlong + halfW;
             let delta = 0;
@@ -282,9 +297,9 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
       // a face may be flush with a wall — detect it via proximity check.
       const rawSnappedTo = snapResult.snappedTo
         ? { wallId: snapResult.snappedTo.wallId, side: snapResult.snappedTo.side as 'top' | 'right' | 'bottom' | 'left' }
-        : detectWallFlush(snapResult.position, column.widthCm, column.depthCm, snapResult.rotation, currentRoom);
+        : detectWallFlush(snapResult.position, liveWidthCm, liveDepthCm, snapResult.rotation, currentRoom);
 
-      updateColumn(column.id, {
+      updateColumn(colId, {
         position: snapResult.position,
         rotation: snapResult.rotation,
         snappedToWall: rawSnappedTo,
