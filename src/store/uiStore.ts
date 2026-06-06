@@ -3,6 +3,11 @@ import type { ToastItem } from '../types';
 
 type ActiveSection = 'room' | 'doors-windows' | 'furniture' | 'favorites' | 'custom-shapes' | 'add-product' | null;
 
+interface MeasureLine {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+}
+
 interface UiState {
   selectedItemId: string | null;
   activeSection: ActiveSection;
@@ -11,6 +16,8 @@ interface UiState {
   selectedWallIds: string[];
   /** When set, PlannerPage opens AddProductModal pre-filled with this custom shape's data */
   saveCustomShapeId: string | null;
+  isMeasureMode: boolean;
+  measureLine: MeasureLine | null;
 }
 
 interface UiActions {
@@ -22,6 +29,8 @@ interface UiActions {
   toggleWallSelection: (id: string, multiSelect: boolean) => void;
   clearWallSelection: () => void;
   setSaveCustomShapeId: (id: string | null) => void;
+  setMeasureMode: (active: boolean) => void;
+  setMeasureLine: (line: MeasureLine | null) => void;
 }
 
 export const useUiStore = create<UiState & UiActions>()((set) => ({
@@ -31,6 +40,8 @@ export const useUiStore = create<UiState & UiActions>()((set) => ({
   toasts: [],
   selectedWallIds: [],
   saveCustomShapeId: null,
+  isMeasureMode: false,
+  measureLine: null,
 
   setSelectedItemId: (id) => set({ selectedItemId: id, selectedWallIds: [] }),
   setActiveSection: (section) => set({ activeSection: section }),
@@ -66,4 +77,6 @@ export const useUiStore = create<UiState & UiActions>()((set) => ({
 
   clearWallSelection: () => set({ selectedWallIds: [] }),
   setSaveCustomShapeId: (id) => set({ saveCustomShapeId: id }),
+  setMeasureMode: (active) => set({ isMeasureMode: active, measureLine: null }),
+  setMeasureLine: (line) => set({ measureLine: line }),
 }));

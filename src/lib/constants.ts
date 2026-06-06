@@ -1,4 +1,5 @@
 export const CM_TO_PX = 4;
+export const WALL_BAND_CM = 15; // wall band / structural thickness
 export const SNAP_DISTANCE_CM = 10;
 export const ORTHOGONAL_SNAP_ANGLE_THRESHOLD = 5;
 export const DEFAULT_DOOR_WIDTH_CM = 90;

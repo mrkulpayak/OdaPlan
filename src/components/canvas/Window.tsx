@@ -4,6 +4,9 @@ import { useUiStore } from '../../store/uiStore';
 import { usePlanStore } from '../../store/planStore';
 import type { Window as WindowType, Point } from '../../types';
 import { WallSegmentLabels } from './WallSegmentLabels';
+import { collectWallItemEdges, snapToWallItemEdges, collectWallObstacleRanges, clampAwayFromRanges } from '../../hooks/useSnap';
+import { SNAP_DISTANCE_CM, WALL_BAND_CM } from '../../lib/constants';
+import { isWallEndpointConvex } from '../../lib/geometry';
 
 function findNearestWallForItem(cmX: number, cmY: number, halfWidthCm: number) {
   const { room } = usePlanStore.getState();
@@ -82,7 +85,29 @@ export const WindowComp = memo(function WindowComp({ window, wallStart, wallEnd,
       const cmX = pxToCm((ev.clientX - r.left - canvas.panX) / canvas.zoom);
       const cmY = pxToCm((ev.clientY - r.top - canvas.panY) / canvas.zoom);
       const nearest = findNearestWallForItem(cmX, cmY, halfWin);
-      if (nearest) updateWindow(window.id, { wallId: nearest.wallId, positionOnWall: nearest.t });
+      if (nearest) {
+        const { room } = usePlanStore.getState();
+        let t = nearest.t;
+        if (room && usePlanStore.getState().canvas.snapEnabled !== false) {
+          const wall = room.walls.find(w => w.id === nearest.wallId);
+          if (wall) {
+            const wA = room.points[wall.startPointIndex];
+            const wB = room.points[wall.endPointIndex];
+            const wallLen = Math.hypot(wB.x - wA.x, wB.y - wA.y);
+            const edges = collectWallItemEdges(nearest.wallId, wA.x, wA.y, wB.x, wB.y, window.id, room);
+            const delta = snapToWallItemEdges(t * wallLen, halfWin, SNAP_DISTANCE_CM / 2, edges);
+            let tCm = t * wallLen + delta;
+            // Clamp away from columns
+            const colRanges = collectWallObstacleRanges(nearest.wallId, wA.x, wA.y, wB.x, wB.y, window.id, room);
+            tCm = clampAwayFromRanges(tCm, halfWin, wallLen, colRanges);
+            // Convex-only wall-band margin
+            const startMargin = isWallEndpointConvex(room, wall, false) ? WALL_BAND_CM : 0;
+            const endMargin   = isWallEndpointConvex(room, wall, true)  ? WALL_BAND_CM : 0;
+            t = Math.max((halfWin + startMargin) / wallLen, Math.min(1 - (halfWin + endMargin) / wallLen, tCm / wallLen));
+          }
+        }
+        updateWindow(window.id, { wallId: nearest.wallId, positionOnWall: t });
+      }
     };
 
     const onUp = () => {

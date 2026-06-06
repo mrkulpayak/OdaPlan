@@ -37,6 +37,166 @@ interface Props {
   canvasRef: React.RefObject<SVGSVGElement | null>;
 }
 
+// ── Wall-thickness band helpers ───────────────────────────────────────────────
+
+/** Shoelace signed area — positive = clockwise in SVG (Y-down). */
+function signedArea(pts: Point[]): number {
+  let s = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    s += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+  }
+  return s / 2;
+}
+
+/** Outward normal sign for a clockwise SVG polygon. */
+function outwardSign(pts: Point[]): 1 | -1 {
+  return signedArea(pts) >= 0 ? 1 : -1;
+}
+
+/** Convert a cm polygon to an SVG points string. */
+function polyPts(pts: Array<{ x: number; y: number }>): string {
+  return pts.map((p) => `${cmToPx(p.x)},${cmToPx(p.y)}`).join(' ');
+}
+
+/**
+ * Compute the miter-join offset polygon — each vertex is the intersection of
+ * the two adjacent offset wall lines.  This fills corner gaps correctly.
+ */
+function computeOuterPolygon(pts: Point[], sign: 1 | -1, thickness: number): Point[] {
+  const n = pts.length;
+  const result: Point[] = [];
+  for (let i = 0; i < n; i++) {
+    const prev = pts[(i - 1 + n) % n];
+    const curr = pts[i];
+    const next = pts[(i + 1) % n];
+    const d1x = curr.x - prev.x, d1y = curr.y - prev.y;
+    const len1 = Math.hypot(d1x, d1y);
+    const d2x = next.x - curr.x, d2y = next.y - curr.y;
+    const len2 = Math.hypot(d2x, d2y);
+    if (len1 < 0.001 || len2 < 0.001) { result.push({ ...curr }); continue; }
+    const ux1 = d1x / len1, uy1 = d1y / len1;
+    const ux2 = d2x / len2, uy2 = d2y / len2;
+    const nx1 = sign * uy1, ny1 = -sign * ux1;
+    const nx2 = sign * uy2, ny2 = -sign * ux2;
+    // Points on each offset line (both at curr offset by their wall's normal)
+    const px = curr.x + thickness * nx1, py = curr.y + thickness * ny1;
+    const qx = curr.x + thickness * nx2, qy = curr.y + thickness * ny2;
+    // Intersection: P + t*d1 = Q + s*d2  →  solve for t
+    const denom = ux1 * uy2 - uy1 * ux2;
+    if (Math.abs(denom) < 0.001) {
+      result.push({ x: (px + qx) / 2, y: (py + qy) / 2 });
+    } else {
+      const t = ((qx - px) * uy2 - (qy - py) * ux2) / denom;
+      result.push({ x: px + t * ux1, y: py + t * uy1 });
+    }
+  }
+  return result;
+}
+
+const BAND_HATCH_ID = 'wall-band-hatch';
+const BAND_THICKNESS = 15; // cm
+const BAND_SW = 1.5; // stroke width, matches wall lines
+
+/**
+ * Rendered BEFORE the room fill polygon.
+ * The outer offset polygon (with hatch) covers both the band area and the room interior.
+ * The room fill polygon renders on top and covers the interior, leaving only the band visible.
+ */
+function WallBandsFill({ room }: { room: RoomType }) {
+  const sign = outwardSign(room.points);
+  const outerPts = computeOuterPolygon(room.points, sign, BAND_THICKNESS);
+  return (
+    <g>
+      <defs>
+        <pattern id={BAND_HATCH_ID} patternUnits="userSpaceOnUse" width={6} height={6}>
+          <line x1={0} y1={6} x2={6} y2={0}
+            stroke="var(--color-room-outline)" strokeWidth={0.8} strokeOpacity={0.5} />
+        </pattern>
+      </defs>
+      <polygon points={polyPts(outerPts)} fill={`url(#${BAND_HATCH_ID})`} stroke="none" />
+    </g>
+  );
+}
+
+/**
+ * Rendered AFTER walls and door/window overlays.
+ * Draws:
+ *   - door section overlays (floor color) with jamb lines
+ *   - window section overlays (white) with jamb lines
+ *   - outer polygon stroke (outlines the full band including corners)
+ */
+function WallBandsOverlays({ room, floorColor }: { room: RoomType; floorColor: string }) {
+  const sign = outwardSign(room.points);
+  const outerPts = computeOuterPolygon(room.points, sign, BAND_THICKNESS);
+
+  return (
+    <g style={{ pointerEvents: 'none' }}>
+      {room.walls.map((wall) => {
+        const A = room.points[wall.startPointIndex];
+        const B = room.points[wall.endPointIndex];
+        const wallLen = Math.hypot(B.x - A.x, B.y - A.y);
+        if (wallLen < 1) return null;
+        const ux = (B.x - A.x) / wallLen, uy = (B.y - A.y) / wallLen;
+        const nx = sign * uy, ny = -sign * ux;
+
+        const doors = room.doors.filter((d) => d.wallId === wall.id);
+        const windows = room.windows.filter((w) => w.wallId === wall.id);
+
+        return (
+          <g key={`band-ov-${wall.id}`}>
+            {doors.map((door) => {
+              const half = door.widthCm / 2;
+              const s0 = Math.max(0, door.positionOnWall * wallLen - half);
+              const s1 = Math.min(wallLen, door.positionOnWall * wallLen + half);
+              if (s1 <= s0) return null;
+              const P0 = { x: A.x + s0 * ux, y: A.y + s0 * uy };
+              const P1 = { x: A.x + s1 * ux, y: A.y + s1 * uy };
+              const P0o = { x: P0.x + BAND_THICKNESS * nx, y: P0.y + BAND_THICKNESS * ny };
+              const P1o = { x: P1.x + BAND_THICKNESS * nx, y: P1.y + BAND_THICKNESS * ny };
+              return (
+                <g key={door.id}>
+                  <polygon points={polyPts([P0, P1, P1o, P0o])} fill={floorColor} stroke="none" />
+                  <line x1={cmToPx(P0.x)} y1={cmToPx(P0.y)} x2={cmToPx(P0o.x)} y2={cmToPx(P0o.y)}
+                    stroke="var(--color-room-outline)" strokeWidth={BAND_SW} />
+                  <line x1={cmToPx(P1.x)} y1={cmToPx(P1.y)} x2={cmToPx(P1o.x)} y2={cmToPx(P1o.y)}
+                    stroke="var(--color-room-outline)" strokeWidth={BAND_SW} />
+                </g>
+              );
+            })}
+
+            {windows.map((win) => {
+              const half = win.widthCm / 2;
+              const s0 = Math.max(0, win.positionOnWall * wallLen - half);
+              const s1 = Math.min(wallLen, win.positionOnWall * wallLen + half);
+              if (s1 <= s0) return null;
+              const P0 = { x: A.x + s0 * ux, y: A.y + s0 * uy };
+              const P1 = { x: A.x + s1 * ux, y: A.y + s1 * uy };
+              const P0o = { x: P0.x + BAND_THICKNESS * nx, y: P0.y + BAND_THICKNESS * ny };
+              const P1o = { x: P1.x + BAND_THICKNESS * nx, y: P1.y + BAND_THICKNESS * ny };
+              return (
+                <g key={win.id}>
+                  <polygon points={polyPts([P0, P1, P1o, P0o])} fill="#ffffff" stroke="none" />
+                  <line x1={cmToPx(P0.x)} y1={cmToPx(P0.y)} x2={cmToPx(P0o.x)} y2={cmToPx(P0o.y)}
+                    stroke="var(--color-room-outline)" strokeWidth={BAND_SW} />
+                  <line x1={cmToPx(P1.x)} y1={cmToPx(P1.y)} x2={cmToPx(P1o.x)} y2={cmToPx(P1o.y)}
+                    stroke="var(--color-room-outline)" strokeWidth={BAND_SW} />
+                </g>
+              );
+            })}
+          </g>
+        );
+      })}
+
+      {/* Outer polygon stroke — outlines the entire band including mitered corners */}
+      <polygon points={polyPts(outerPts)} fill="none"
+        stroke="var(--color-room-outline)" strokeWidth={BAND_SW} strokeLinejoin="miter" />
+    </g>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: Props) {
   const updateWallLength = usePlanStore((s) => s.updateWallLength);
   const toggleWallLock = usePlanStore((s) => s.toggleWallLock);
@@ -48,6 +208,8 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
   const snapWallStraight = usePlanStore((s) => s.snapWallStraight);
   const furnitureInstances = usePlanStore((s) => s.furnitureInstances);
   const customShapeInstances = usePlanStore((s) => s.customShapeInstances);
+  const wallsLocked = usePlanStore((s) => s.canvas.wallsLocked);
+  const floorColor = usePlanStore((s) => s.canvas.floorColor);
   const addToast = useUiStore((s) => s.addToast);
   const setSelectedItemId = useUiStore((s) => s.setSelectedItemId);
   const selectedWallIds = useUiStore((s) => s.selectedWallIds);
@@ -170,6 +332,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
       if (!drag.isDragging) {
         if (Math.hypot(dClientX, dClientY) < WALL_DRAG_THRESHOLD_PX) return;
         drag.isDragging = true;
+        usePlanStore.getState().saveSnapshot();
         // Clear wall/item selection when drag starts
         setSelectedCornerIdx(null);
         setSelectedItemId(null);
@@ -241,6 +404,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
       }
       cornerPointerStartRef.current = null;
       draggingPointRef.current = idx;
+      usePlanStore.getState().saveSnapshot();
       setSelectedCornerIdx(null);
       const cm = svgToCm(e.clientX, e.clientY);
       moveRoomPoint(idx, cm);
@@ -368,6 +532,9 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
   return (
     <>
       <g>
+        {/* Wall-thickness bands — hatch fill rendered BEFORE room fill so room floor covers the interior */}
+        {wallsLocked && <WallBandsFill room={room} />}
+
         {/* Room fill — uses --color-floor injected from Canvas */}
         <polygon points={pointsStr} fill="var(--color-floor, var(--color-surface))" stroke="none" />
 
@@ -375,6 +542,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
         {room.walls.map((wall) => {
           const wallDoors = room.doors.filter((d) => d.wallId === wall.id);
           const wallWindows = room.windows.filter((w) => w.wallId === wall.id);
+          const wallCols = (room.columns ?? []).filter((c) => c.snappedToWall != null);
           return (
             <Wall
               key={wall.id}
@@ -382,6 +550,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
               points={room.points}
               doors={wallDoors}
               windows={wallWindows}
+              wallColumns={wallCols}
               viewRotation={viewRotation}
               zoom={zoom}
               isSelected={selectedWallIds.includes(wall.id)}
@@ -392,6 +561,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
               onSelectWindow={setSelectedItemId}
               onWallClick={handleWallPointerDown}
               isDraggable={isWallDraggable(wall.id)}
+              wallsLocked={wallsLocked}
             />
           );
         })}
@@ -422,8 +592,8 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
           );
         })}
 
-        {/* Corner points — draggable; tappable for 90° lock */}
-        {room.points.map((p, i) => (
+        {/* Corner points — hidden when walls are globally locked */}
+        {!wallsLocked && room.points.map((p, i) => (
           <circle
             key={i}
             cx={cmToPx(p.x)}
@@ -471,6 +641,9 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
             </g>
           );
         })}
+
+        {/* Wall-thickness band overlays — door/window color sections and outer stroke, on top of everything */}
+        {wallsLocked && <WallBandsOverlays room={room} floorColor={floorColor} />}
       </g>
 
       {/* Corner-tap angle lock popup
@@ -621,7 +794,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
               style={{
                 fontFamily: 'var(--font-body)',
                 fontSize: '11px',
-                background: 'var(--color-accent, #f59e0b)',
+                background: 'var(--color-primary)',
                 color: '#fff',
                 border: 'none',
                 borderRadius: '3px',

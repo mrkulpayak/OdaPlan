@@ -4,6 +4,9 @@ import { useUiStore } from '../../store/uiStore';
 import { usePlanStore } from '../../store/planStore';
 import type { Door as DoorType, Point } from '../../types';
 import { WallSegmentLabels } from './WallSegmentLabels';
+import { collectWallItemEdges, snapToWallItemEdges, collectWallObstacleRanges, clampAwayFromRanges } from '../../hooks/useSnap';
+import { SNAP_DISTANCE_CM, WALL_BAND_CM } from '../../lib/constants';
+import { isWallEndpointConvex } from '../../lib/geometry';
 
 function findNearestWallForItem(cmX: number, cmY: number, halfWidthCm: number) {
   const { room } = usePlanStore.getState();
@@ -89,11 +92,29 @@ export const Door = memo(function Door({ door, wallStart, wallEnd, onSelect }: P
       const cmX = pxToCm((ev.clientX - r.left - canvas.panX) / canvas.zoom);
       const cmY = pxToCm((ev.clientY - r.top - canvas.panY) / canvas.zoom);
       const nearest = findNearestWallForItem(cmX, cmY, halfDoor);
-      if (nearest) updateDoor(door.id, {
-        wallId: nearest.wallId,
-        positionOnWall: nearest.t,
-        hingeSide: nearest.t < 0.5 ? 'left' : 'right',
-      });
+      if (nearest) {
+        const { room } = usePlanStore.getState();
+        let t = nearest.t;
+        if (room && usePlanStore.getState().canvas.snapEnabled !== false) {
+          const wall = room.walls.find(w => w.id === nearest.wallId);
+          if (wall) {
+            const wA = room.points[wall.startPointIndex];
+            const wB = room.points[wall.endPointIndex];
+            const wallLen = Math.hypot(wB.x - wA.x, wB.y - wA.y);
+            const edges = collectWallItemEdges(nearest.wallId, wA.x, wA.y, wB.x, wB.y, door.id, room);
+            const delta = snapToWallItemEdges(t * wallLen, halfDoor, SNAP_DISTANCE_CM / 2, edges);
+            let tCm = t * wallLen + delta;
+            // Clamp away from columns
+            const colRanges = collectWallObstacleRanges(nearest.wallId, wA.x, wA.y, wB.x, wB.y, door.id, room);
+            tCm = clampAwayFromRanges(tCm, halfDoor, wallLen, colRanges);
+            // Convex-only wall-band margin
+            const startMargin = isWallEndpointConvex(room, wall, false) ? WALL_BAND_CM : 0;
+            const endMargin   = isWallEndpointConvex(room, wall, true)  ? WALL_BAND_CM : 0;
+            t = Math.max((halfDoor + startMargin) / wallLen, Math.min(1 - (halfDoor + endMargin) / wallLen, tCm / wallLen));
+          }
+        }
+        updateDoor(door.id, { wallId: nearest.wallId, positionOnWall: t, hingeSide: t < 0.5 ? 'left' : 'right' });
+      }
     };
 
     const onUp = () => {

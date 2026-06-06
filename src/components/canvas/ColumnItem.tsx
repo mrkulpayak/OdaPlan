@@ -1,8 +1,8 @@
-import { memo, useState } from 'react';
+import { memo, useState, useRef, useCallback } from 'react';
 import { cmToPx, pxToCm } from '../../lib/geometry';
 import { usePlanStore } from '../../store/planStore';
 import { useUiStore } from '../../store/uiStore';
-import { computeSnap } from '../../hooks/useSnap';
+import { computeSnap, collectWallItemEdges, snapToWallItemEdges } from '../../hooks/useSnap';
 import { SNAP_DISTANCE_CM } from '../../lib/constants';
 import type { Column, Room as RoomType, FurnitureCatalogItem } from '../../types';
 import { WallSegmentLabels } from './WallSegmentLabels';
@@ -160,7 +160,7 @@ const DimLabel = memo(function DimLabel({ x1, y1, x2, y2, midX, midY, distCm, zo
   const sw = Math.max(0.5, 1 / zoom);
   return (
     <g>
-      <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--color-accent)" strokeWidth={sw} strokeDasharray={`${4 / zoom} ${3 / zoom}`} style={{ pointerEvents: 'none' }} />
+      <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--color-primary)" strokeWidth={sw} strokeDasharray={`${4 / zoom} ${3 / zoom}`} style={{ pointerEvents: 'none' }} />
       {(() => {
         const len = Math.hypot(x2 - x1, y2 - y1);
         if (len < 0.5) return null;
@@ -168,8 +168,8 @@ const DimLabel = memo(function DimLabel({ x1, y1, x2, y2, midX, midY, distCm, zo
         const py = (x2 - x1) / len * (4 / zoom);
         return (
           <>
-            <line x1={x1 - px} y1={y1 - py} x2={x1 + px} y2={y1 + py} stroke="var(--color-accent)" strokeWidth={sw} style={{ pointerEvents: 'none' }} />
-            <line x1={x2 - px} y1={y2 - py} x2={x2 + px} y2={y2 + py} stroke="var(--color-accent)" strokeWidth={sw} style={{ pointerEvents: 'none' }} />
+            <line x1={x1 - px} y1={y1 - py} x2={x1 + px} y2={y1 + py} stroke="var(--color-primary)" strokeWidth={sw} style={{ pointerEvents: 'none' }} />
+            <line x1={x2 - px} y1={y2 - py} x2={x2 + px} y2={y2 + py} stroke="var(--color-primary)" strokeWidth={sw} style={{ pointerEvents: 'none' }} />
           </>
         );
       })()}
@@ -189,6 +189,7 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
   const selectedItemId = useUiStore((s) => s.selectedItemId);
   const setSelectedItemId = useUiStore((s) => s.setSelectedItemId);
   const updateColumn = usePlanStore((s) => s.updateColumn);
+  const wallsLocked = usePlanStore((s) => s.canvas.wallsLocked);
   const isSelected = selectedItemId === column.id;
 
   const { widthCm: wc, depthCm: dc, position: pos, rotation } = column;
@@ -221,9 +222,22 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
   ];
 
   // ── Drag with snap ──────────────────────────────────────────────────────────
-  const handlePointerDown = (e: React.PointerEvent) => {
+  // Drag state lives in a ref so it survives React re-renders without stale closures.
+  // All pointer events go through React handlers on the <g> element; no window listeners needed.
+  const dragRef = useRef<{
+    startCmX: number;
+    startCmY: number;
+    startPosX: number;
+    startPosY: number;
+    canvasSvg: SVGSVGElement;
+  } | null>(null);
+
+  const colId = column.id;
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
-    setSelectedItemId(column.id);
+    usePlanStore.getState().saveSnapshot();
+    setSelectedItemId(colId);
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
 
     const canvasSvg = document.querySelector('#canvas svg') as SVGSVGElement | null;
@@ -232,87 +246,103 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
     const { canvas } = usePlanStore.getState();
     const startCmX = pxToCm((e.clientX - r.left - canvas.panX) / canvas.zoom);
     const startCmY = pxToCm((e.clientY - r.top - canvas.panY) / canvas.zoom);
-    const startPosX = pos.x;
-    const startPosY = pos.y;
+    const liveState = usePlanStore.getState();
+    const liveCol = (liveState.room?.columns ?? []).find(c => c.id === colId);
+    dragRef.current = {
+      startCmX,
+      startCmY,
+      startPosX: liveCol?.position.x ?? liveState.room ? 0 : 0,
+      startPosY: liveCol?.position.y ?? 0,
+      canvasSvg,
+    };
+    // Initialise with live position
+    if (liveCol) {
+      dragRef.current.startPosX = liveCol.position.x;
+      dragRef.current.startPosY = liveCol.position.y;
+    }
+  }, [colId, setSelectedItemId]);
 
-    const colId = column.id;
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    e.stopPropagation();          // prevent canvas pan from activating
+    e.preventDefault();
 
-    const onMove = (ev: PointerEvent) => {
-      const { canvas: cv, room: currentRoom } = usePlanStore.getState();
-      const rr = canvasSvg.getBoundingClientRect();
-      const cmX = pxToCm((ev.clientX - rr.left - cv.panX) / cv.zoom);
-      const cmY = pxToCm((ev.clientY - rr.top - cv.panY) / cv.zoom);
-      const rawPos = { x: startPosX + cmX - startCmX, y: startPosY + cmY - startCmY };
+    const { startCmX, startCmY, startPosX, startPosY, canvasSvg } = dragRef.current;
+    const { canvas: cv, room: currentRoom } = usePlanStore.getState();
+    const rr = canvasSvg.getBoundingClientRect();
+    const cmX = pxToCm((e.clientX - rr.left - cv.panX) / cv.zoom);
+    const cmY = pxToCm((e.clientY - rr.top - cv.panY) / cv.zoom);
+    const rawPos = { x: startPosX + cmX - startCmX, y: startPosY + cmY - startCmY };
 
-      if (!currentRoom) { updateColumn(colId, { position: rawPos, snappedToWall: undefined }); return; }
+    if (!currentRoom) { updateColumn(colId, { position: rawPos, snappedToWall: undefined }); return; }
 
-      // Read current column state from store so snap uses up-to-date dimensions/rotation,
-      // NOT stale closure values (snap can change rotation, causing flicker if stale).
-      const liveCol = (currentRoom.columns ?? []).find(c => c.id === colId);
-      const liveWidthCm  = liveCol?.widthCm  ?? column.widthCm;
-      const liveDepthCm  = liveCol?.depthCm  ?? column.depthCm;
-      const liveRotation = liveCol?.rotation ?? column.rotation;
+    // Read live column state so snap uses up-to-date dimensions/rotation
+    const liveCol = (currentRoom.columns ?? []).find(c => c.id === colId);
+    const liveWidthCm  = liveCol?.widthCm  ?? column.widthCm;
+    const liveDepthCm  = liveCol?.depthCm  ?? column.depthCm;
+    const liveRotation = liveCol?.rotation ?? column.rotation;
 
-      // Exclude self from columns so computeSnap doesn't snap the column to its own faces
-      const roomForSnap = {
-        ...currentRoom,
-        columns: (currentRoom.columns ?? []).filter(c => c.id !== colId),
-      };
+    // Exclude self from columns so computeSnap doesn't snap to own faces
+    const roomForSnap = {
+      ...currentRoom,
+      columns: (currentRoom.columns ?? []).filter(c => c.id !== colId),
+    };
 
-      // Use the same snap logic as furniture (computeSnap)
-      const fakeItem = { widthCm: liveWidthCm, depthCm: liveDepthCm } as FurnitureCatalogItem;
-      let snapResult = computeSnap(rawPos, fakeItem, roomForSnap, [], new Map(), liveRotation);
+    const fakeItem = { widthCm: liveWidthCm, depthCm: liveDepthCm } as FurnitureCatalogItem;
+    const { canvas: cv2 } = usePlanStore.getState();
+    const snapRoomForCol = cv2.snapEnabled !== false ? roomForSnap : null;
+    let snapResult = computeSnap(rawPos, fakeItem, snapRoomForCol, [], new Map(), liveRotation);
 
-      // Corner along-wall snap: when wall-snapped, additionally snap column edge to wall endpoint
-      if (snapResult.snappedTo) {
-        const { wallId, side } = snapResult.snappedTo;
-        const wall = currentRoom.walls.find((w) => w.id === wallId);
-        if (wall) {
-          const wA = currentRoom.points[wall.startPointIndex];
-          const wB = currentRoom.points[wall.endPointIndex];
-          const wLen = Math.hypot(wB.x - wA.x, wB.y - wA.y);
-          if (wLen > 1) {
-            const ux = (wB.x - wA.x) / wLen;
-            const uy = (wB.y - wA.y) / wLen;
-            const cx = snapResult.position.x + liveWidthCm / 2;
-            const cy = snapResult.position.y + liveDepthCm / 2;
-            const tAlong = (cx - wA.x) * ux + (cy - wA.y) * uy;
-            const halfW = (side === 'top' || side === 'bottom') ? liveWidthCm / 2 : liveDepthCm / 2;
-            const leftT = tAlong - halfW;
-            const rightT = tAlong + halfW;
-            let delta = 0;
-            if (Math.abs(leftT) < SNAP_DISTANCE_CM) delta = -leftT;
-            else if (Math.abs(rightT - wLen) < SNAP_DISTANCE_CM) delta = wLen - rightT;
-            if (delta !== 0) {
-              snapResult = {
-                ...snapResult,
-                position: { x: snapResult.position.x + delta * ux, y: snapResult.position.y + delta * uy },
-              };
-            }
+    // Along-wall snap: snap column edge to wall endpoints, doors, windows, other columns
+    if (snapResult.snappedTo) {
+      const { wallId, side } = snapResult.snappedTo;
+      const wall = currentRoom.walls.find((w) => w.id === wallId);
+      if (wall) {
+        const wA = currentRoom.points[wall.startPointIndex];
+        const wB = currentRoom.points[wall.endPointIndex];
+        const wLen = Math.hypot(wB.x - wA.x, wB.y - wA.y);
+        if (wLen > 1) {
+          const ux = (wB.x - wA.x) / wLen;
+          const uy = (wB.y - wA.y) / wLen;
+          const cx = snapResult.position.x + liveWidthCm / 2;
+          const cy = snapResult.position.y + liveDepthCm / 2;
+          const tAlong = (cx - wA.x) * ux + (cy - wA.y) * uy;
+          const halfW = (side === 'top' || side === 'bottom') ? liveWidthCm / 2 : liveDepthCm / 2;
+          // Snap to wall endpoints
+          const leftT  = tAlong - halfW;
+          const rightT = tAlong + halfW;
+          let delta = 0;
+          if (Math.abs(leftT) < SNAP_DISTANCE_CM) delta = -leftT;
+          else if (Math.abs(rightT - wLen) < SNAP_DISTANCE_CM) delta = wLen - rightT;
+          // Snap to door/window/column edges on this wall
+          if (delta === 0) {
+            const edges = collectWallItemEdges(wallId, wA.x, wA.y, wB.x, wB.y, colId, currentRoom);
+            delta = snapToWallItemEdges(tAlong, halfW, SNAP_DISTANCE_CM / 2, edges);
+          }
+          if (delta !== 0) {
+            snapResult = {
+              ...snapResult,
+              position: { x: snapResult.position.x + delta * ux, y: snapResult.position.y + delta * uy },
+            };
           }
         }
       }
+    }
 
-      // If computeSnap fired corner snap (Priority 1), snappedTo is undefined even though
-      // a face may be flush with a wall — detect it via proximity check.
-      const rawSnappedTo = snapResult.snappedTo
-        ? { wallId: snapResult.snappedTo.wallId, side: snapResult.snappedTo.side as 'top' | 'right' | 'bottom' | 'left' }
-        : detectWallFlush(snapResult.position, liveWidthCm, liveDepthCm, snapResult.rotation, currentRoom);
+    const rawSnappedTo = snapResult.snappedTo
+      ? { wallId: snapResult.snappedTo.wallId, side: snapResult.snappedTo.side as 'top' | 'right' | 'bottom' | 'left' }
+      : detectWallFlush(snapResult.position, liveWidthCm, liveDepthCm, snapResult.rotation, currentRoom);
 
-      updateColumn(colId, {
-        position: snapResult.position,
-        rotation: snapResult.rotation,
-        snappedToWall: rawSnappedTo,
-      });
-    };
+    updateColumn(colId, {
+      position: snapResult.position,
+      rotation: snapResult.rotation,
+      snappedToWall: rawSnappedTo,
+    });
+  }, [colId, column.widthCm, column.depthCm, column.rotation, updateColumn]);
 
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  };
+  const handlePointerUp = useCallback((_e: React.PointerEvent) => {
+    dragRef.current = null;
+  }, []);
 
   // ── Wall-snapped depth label (into room, shown for selected column only) ────
   const WallDepthLabel = () => {
@@ -362,19 +392,71 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
     <g>
       <defs>
         <pattern id={hatchId} patternUnits="userSpaceOnUse" width={6} height={6}>
-          <line x1={0} y1={6} x2={6} y2={0} stroke="var(--color-room-outline)" strokeWidth={0.7} strokeOpacity={0.45} />
+          <line x1={0} y1={6} x2={6} y2={0} stroke="var(--color-room-outline)" strokeWidth={0.8} strokeOpacity={0.5} />
         </pattern>
       </defs>
 
       {/* Column body */}
-      <g transform={`rotate(${rotation}, ${cxPx}, ${cyPx})`} style={{ cursor: 'move' }} onPointerDown={handlePointerDown}>
+      <g
+        transform={`rotate(${rotation}, ${cxPx}, ${cyPx})`}
+        style={{ cursor: dragRef.current ? 'grabbing' : 'move' }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+      >
+        <rect x={cxPx - wPx / 2} y={cyPx - dPx / 2} width={wPx} height={dPx} fill="var(--color-background)" />
         <rect x={cxPx - wPx / 2} y={cyPx - dPx / 2} width={wPx} height={dPx} fill={`url(#${hatchId})`} />
-        <rect
-          x={cxPx - wPx / 2} y={cyPx - dPx / 2} width={wPx} height={dPx}
-          fill="none"
-          stroke={isSelected ? 'var(--color-primary)' : 'var(--color-room-outline)'}
-          strokeWidth={isSelected ? 2 / zoom : 1.5}
-        />
+        {(() => {
+          const sc = isSelected ? 'var(--color-primary)' : 'var(--color-room-outline)';
+          const sw = isSelected ? 2 / zoom : 1.5;
+          const x = cxPx - wPx / 2, y = cyPx - dPx / 2;
+
+          // When walls locked, detect ALL faces that are flush against any wall and hide them
+          if (wallsLocked && column.snappedToWall) {
+            const θ = (rotation * Math.PI) / 180;
+            const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
+            const faceOffsets = [
+              { key: 'top'    as const, lx: 0,        ly: -dc / 2 },
+              { key: 'bottom' as const, lx: 0,        ly:  dc / 2 },
+              { key: 'left'   as const, lx: -wc / 2,  ly: 0       },
+              { key: 'right'  as const, lx:  wc / 2,  ly: 0       },
+            ];
+            const hiddenSides = new Set<string>();
+            for (const { key, lx, ly } of faceOffsets) {
+              const fx = cxCm + lx * cosθ - ly * sinθ;
+              const fy = cyCm + lx * sinθ + ly * cosθ;
+              for (const wall of room.walls) {
+                const A = room.points[wall.startPointIndex];
+                const B = room.points[wall.endPointIndex];
+                const wLen = Math.hypot(B.x - A.x, B.y - A.y);
+                if (wLen < 1) continue;
+                const wux = (B.x - A.x) / wLen, wuy = (B.y - A.y) / wLen;
+                const dx = fx - A.x, dy = fy - A.y;
+                const perp = Math.abs(-dx * wuy + dy * wux);
+                const along = dx * wux + dy * wuy;
+                if (perp < 2 && along >= -2 && along <= wLen + 2) {
+                  hiddenSides.add(key);
+                  break;
+                }
+              }
+            }
+            const sides = [
+              { key: 'top',    x1: x,       y1: y,       x2: x + wPx, y2: y       },
+              { key: 'right',  x1: x + wPx, y1: y,       x2: x + wPx, y2: y + dPx },
+              { key: 'bottom', x1: x,       y1: y + dPx, x2: x + wPx, y2: y + dPx },
+              { key: 'left',   x1: x,       y1: y,       x2: x,       y2: y + dPx },
+            ] as const;
+            return (
+              <>
+                {sides.filter(s => !hiddenSides.has(s.key)).map(s => (
+                  <line key={s.key} x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2} stroke={sc} strokeWidth={sw} strokeLinecap="round" />
+                ))}
+              </>
+            );
+          }
+
+          return <rect x={x} y={y} width={wPx} height={dPx} fill="none" stroke={sc} strokeWidth={sw} />;
+        })()}
       </g>
 
       {/* Distance labels when selected */}

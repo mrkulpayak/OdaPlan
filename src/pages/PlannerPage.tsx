@@ -7,7 +7,7 @@ import { Toast } from '../components/ui/Toast';
 import { AddProductModal } from '../components/modals/AddProductModal';
 import type { AddProductPrefill } from '../components/modals/AddProductModal';
 import { supabase } from '../lib/supabase';
-import { Download, Printer, RotateCcw, RotateCw, FilePlus, Ruler, Grid3X3 } from 'lucide-react';
+import { Download, Printer, RotateCcw, RotateCw, FilePlus, Ruler, Grid3X3, Magnet, LockKeyhole, LockKeyholeOpen, Undo2, Redo2, AlignHorizontalDistributeCenter } from 'lucide-react';
 import { ColorPickerPopover } from '../components/ui/ColorPickerPopover';
 import type { ColorPreset } from '../components/ui/ColorPickerPopover';
 import { useCanvas } from '../hooks/useCanvas';
@@ -52,6 +52,11 @@ export function PlannerPage({ session }: Props) {
   const { rotateView } = useCanvas();
   const loadCatalog = useCatalogStore((s) => s.loadCatalog);
   const resetPlan = usePlanStore((s) => s.resetPlan);
+  const undo = usePlanStore((s) => s.undo);
+  const redo = usePlanStore((s) => s.redo);
+  const canUndo = usePlanStore((s) => s.canUndo);
+  const canRedo = usePlanStore((s) => s.canRedo);
+  const snapAllWallsStraight = usePlanStore((s) => s.snapAllWallsStraight);
   const room = usePlanStore((s) => s.room);
   const furnitureInstances = usePlanStore((s) => s.furnitureInstances);
   const canvas = usePlanStore((s) => s.canvas);
@@ -77,6 +82,20 @@ export function PlannerPage({ session }: Props) {
     loadCatalog(session.user.id);
   }, [session.user.id, loadCatalog]);
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [undo, redo]);
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
   };
@@ -99,6 +118,9 @@ export function PlannerPage({ session }: Props) {
       addToast({ type: 'error', message: 'Dışa aktarma başarısız. Tekrar deneyin.' });
     }
   };
+
+  const isMeasureMode = useUiStore((s) => s.isMeasureMode);
+  const setMeasureMode = useUiStore((s) => s.setMeasureMode);
 
   const toggleDimensions = () => {
     setCanvasState({ showDimensionsOnExport: !canvas.showDimensionsOnExport });
@@ -126,6 +148,15 @@ export function PlannerPage({ session }: Props) {
         </span>
 
         <div className="flex items-center gap-1">
+          <button title="Geri Al (Ctrl+Z)" onClick={undo} disabled={!canUndo} className={btnCls} style={{ minWidth: '44px', minHeight: '44px', opacity: canUndo ? 1 : 0.35 }}>
+            <Undo2 size={16} />
+          </button>
+          <button title="Yinele (Ctrl+Y)" onClick={redo} disabled={!canRedo} className={btnCls} style={{ minWidth: '44px', minHeight: '44px', opacity: canRedo ? 1 : 0.35 }}>
+            <Redo2 size={16} />
+          </button>
+
+          <div className="w-px h-5 bg-border mx-1" />
+
           <button title="Sola Döndür" onClick={() => rotateView('ccw')} className={btnCls} style={{ minWidth: '44px', minHeight: '44px' }}>
             <RotateCcw size={16} />
           </button>
@@ -138,17 +169,27 @@ export function PlannerPage({ session }: Props) {
 
           <div className="w-px h-5 bg-border mx-1" />
 
-          {/* Dimension toggle */}
+          {/* Measure tool */}
           <button
-            title={canvas.showDimensionsOnExport ? 'Ölçüleri gizle' : 'Ölçüleri göster'}
-            onClick={toggleDimensions}
+            title={isMeasureMode ? 'Cetveli Kapat' : 'Cetvel — iki nokta arası ölç'}
+            onClick={() => setMeasureMode(!isMeasureMode)}
             className={btnCls}
             style={{
               minWidth: '44px', minHeight: '44px',
-              color: canvas.showDimensionsOnExport ? 'var(--color-primary)' : undefined,
+              color: isMeasureMode ? 'var(--color-primary)' : undefined,
             }}
           >
             <Ruler size={16} />
+          </button>
+
+          <button
+            title="Tüm Duvarları Hizala"
+            onClick={() => snapAllWallsStraight()}
+            className={btnCls}
+            style={{ minWidth: '44px', minHeight: '44px' }}
+            disabled={!room}
+          >
+            <AlignHorizontalDistributeCenter size={16} />
           </button>
 
           <button title="PNG İndir" onClick={handleExport} className={btnCls} style={{ minWidth: '44px', minHeight: '44px' }}>
@@ -212,6 +253,32 @@ export function PlannerPage({ session }: Props) {
             }}
           >
             <Grid3X3 size={16} />
+          </button>
+
+          {/* ── Walls lock toggle ── */}
+          <button
+            title={canvas.wallsLocked ? 'Duvarları Aç' : 'Tüm Duvarları Kilitle'}
+            onClick={() => setCanvasState({ wallsLocked: !canvas.wallsLocked })}
+            className={btnCls}
+            style={{
+              minWidth: '44px', minHeight: '44px',
+              color: canvas.wallsLocked ? 'var(--color-primary)' : undefined,
+            }}
+          >
+            {canvas.wallsLocked ? <LockKeyhole size={16} /> : <LockKeyholeOpen size={16} />}
+          </button>
+
+          {/* ── Snap toggle ── */}
+          <button
+            title={canvas.snapEnabled !== false ? 'Snap Kapat' : 'Snap Aç'}
+            onClick={() => setCanvasState({ snapEnabled: canvas.snapEnabled === false })}
+            className={btnCls}
+            style={{
+              minWidth: '44px', minHeight: '44px',
+              color: canvas.snapEnabled !== false ? 'var(--color-primary)' : undefined,
+            }}
+          >
+            <Magnet size={16} />
           </button>
 
           <div className="w-px h-5 bg-border mx-1" />

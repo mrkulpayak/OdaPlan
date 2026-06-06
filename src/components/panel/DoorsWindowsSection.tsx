@@ -5,7 +5,8 @@ import { distancePointToSegment, segmentLength, pxToCm } from '../../lib/geometr
 import { DEFAULT_DOOR_WIDTH_CM, DEFAULT_WINDOW_WIDTH_CM } from '../../lib/constants';
 import type { Door, Window, Column } from '../../types';
 
-// Recompute top-left position so snapped face stays on wall after dimension change
+// Recompute top-left position so snapped face stays on wall after dimension change.
+// The snapped face (perpendicular to wall) stays flush; the along-wall start edge stays fixed.
 function adjustColPos(col: Column, newWc: number, newDc: number) {
   if (!col.snappedToWall) return col.position;
   const { side } = col.snappedToWall;
@@ -25,7 +26,15 @@ function adjustColPos(col: Column, newWc: number, newDc: number) {
     : [newWc / 2, 0];
   const newCx = fmx - (nflx * cosθ - nfly * sinθ);
   const newCy = fmy - (nflx * sinθ + nfly * cosθ);
-  return { x: newCx - newWc / 2, y: newCy - newDc / 2 };
+  const p = { x: newCx - newWc / 2, y: newCy - newDc / 2 };
+  // Keep along-wall start edge fixed (don't let it drift symmetrically).
+  // For top/bottom snap the along-wall axis is X; for left/right it is Y.
+  if (side === 'top' || side === 'bottom') {
+    p.x = col.position.x;
+  } else {
+    p.y = col.position.y;
+  }
+  return p;
 }
 
 function findNearestWall(cmX: number, cmY: number, room: ReturnType<typeof usePlanStore.getState>['room']) {

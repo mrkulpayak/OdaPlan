@@ -128,6 +128,10 @@ export interface CanvasState {
   floorColor: string;
   /** Show 50 cm grid overlay */
   showGrid: boolean;
+  /** Enable snap-to-wall and snap-to-furniture */
+  snapEnabled: boolean;
+  /** Lock all walls: hide editing UI, show 10 cm outward wall-thickness band */
+  wallsLocked: boolean;
 }
 
 // ── Custom Shapes ──────────────────────────────────────────────────────────

@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { FurnitureFrontSide } from '../../types';
 
-/** Screen-angle offset so the indicator line points toward the front face.
- *  At rotation=0: bottom→90°, top→270°, left→180°, right→0° in SVG polar space. */
+/**
+ * Screen-angle offset so the indicator points toward the front face at rotation=0.
+ *   bottom face → 90°  (pointing down  in SVG = positive Y direction)
+ *   top    face → 270° (pointing up)
+ *   left   face → 180° (pointing left)
+ *   right  face → 0°   (pointing right)
+ */
 const FACE_ANGLE_OFFSET: Record<FurnitureFrontSide, number> = {
   bottom: 90,
   top:    270,
@@ -64,7 +69,7 @@ function polarToXY(cx: number, cy: number, r: number, angleDeg: number) {
 }
 
 /** Highlight color for the active zone ring */
-const ZONE_HIGHLIGHT = 'rgba(59,130,246,0.12)'; // subtle blue tint
+const ZONE_HIGHLIGHT = 'rgba(59,130,246,0.12)';
 
 export function RadialRotateMenu({
   cx, cy, currentAngle, originalAngle, frontSide = 'bottom', zoom,
@@ -77,8 +82,41 @@ export function RadialRotateMenu({
 
   const [activeZone, setActiveZone] = useState<Zone>(0);
 
+  // Indicator line ref — updated directly in onMove to avoid React re-render lag
+  const indicatorRef = useRef<SVGLineElement>(null);
+
+  // Compute initial indicator local angle (screen angle → local angle accounting for rotate(-rotation))
+  // screen angle of front face = originalAngle + faceOffset
+  // local angle (inside rotate(-currentAngle)) = screenAngle + currentAngle
+  // = (originalAngle + faceOffset) + currentAngle
+  // At mount, currentAngle == originalAngle, so: = 2*originalAngle + faceOffset
+  const faceOffset = FACE_ANGLE_OFFSET[frontSide ?? 'bottom'];
+
+  // Helper: given a desired SCREEN angle for the indicator, returns the LOCAL angle
+  // that places the indicator there, accounting for the rotate(-currentAngle) transform.
+  // screen = local - currentAngle  →  local = screen + currentAngle
+  // Since currentAngle = snappedFaceAngle - faceOffset:
+  //   local = snappedFaceAngle + snappedFaceAngle - faceOffset = 2*snappedFaceAngle - faceOffset
+  // (This avoids dependency on the React-prop currentAngle which lags by one frame.)
+  function screenToLocalAngle(screenAngle: number, snapFaceAngle: number): number {
+    // snapFaceAngle is the face's target screen direction
+    // rotation = snapFaceAngle - faceOffset → local = screenAngle + rotation = screenAngle + snapFaceAngle - faceOffset
+    // For the indicator, screenAngle == snapFaceAngle, so: local = 2*snapFaceAngle - faceOffset
+    void screenAngle; // same as snapFaceAngle here
+    return ((2 * snapFaceAngle - faceOffset) % 360 + 360) % 360;
+  }
+
   useEffect(() => {
-    const faceOffset = FACE_ANGLE_OFFSET[frontSide ?? 'bottom'];
+    const fo = FACE_ANGLE_OFFSET[frontSide ?? 'bottom'];
+
+    // Set indicator to current front face on mount
+    const initFaceAngle = ((originalAngle + fo) % 360 + 360) % 360;
+    const initLocalAngle = ((2 * initFaceAngle - fo) % 360 + 360) % 360;
+    const initTip = polarToXY(cx, cy, r3 + 4 / zoom, initLocalAngle);
+    if (indicatorRef.current) {
+      indicatorRef.current.setAttribute('x2', String(initTip.x));
+      indicatorRef.current.setAttribute('y2', String(initTip.y));
+    }
 
     const onMove = (e: PointerEvent) => {
       const el = document.getElementById('radial-menu-center');
@@ -92,15 +130,34 @@ export function RadialRotateMenu({
       const zone = getZone(dist);
       setActiveZone(zone);
 
-      const step = stepForZone(zone);
-      if (step === null) return;
-      // Snap the FACE direction (= mouse direction) then convert to furniture rotation:
-      //   rotation = faceAngle - faceOffset
-      // This makes the front face point toward the mouse.
+      // Raw mouse angle in screen space (SVG convention: 0°=right, 90°=down)
       const rawMouseAngle = Math.atan2(dy, dx) * (180 / Math.PI);
-      const snappedFaceAngle = ((snapTo(rawMouseAngle, step) % 360) + 360) % 360;
-      const rotation = ((snappedFaceAngle - faceOffset) % 360 + 360) % 360;
-      onAngleChange(rotation);
+      const step = stepForZone(zone);
+
+      // The indicator always tracks the mouse (snapped to step when outside dead zone)
+      let snappedFaceAngle: number;
+      if (step === null) {
+        // Dead zone: indicator follows mouse freely, but rotation doesn't change
+        snappedFaceAngle = ((rawMouseAngle % 360) + 360) % 360;
+      } else {
+        // Snap face direction to nearest multiple of step
+        snappedFaceAngle = ((snapTo(rawMouseAngle, step) % 360) + 360) % 360;
+        // Update furniture rotation: rotation = faceAngle - faceOffset
+        const rotation = ((snappedFaceAngle - fo) % 360 + 360) % 360;
+        onAngleChange(rotation);
+      }
+
+      // Direct DOM update for lag-free indicator tracking.
+      // The indicator lives inside <g transform="rotate(-currentAngle, cx, cy)">.
+      // To appear at screen angle snappedFaceAngle, local angle must be:
+      //   2 * snappedFaceAngle - faceOffset
+      // (This formula is independent of currentAngle — no stale-closure issue.)
+      if (indicatorRef.current) {
+        const localAngle = ((2 * snappedFaceAngle - fo) % 360 + 360) % 360;
+        const tip = polarToXY(cx, cy, r3 + 4 / zoom, localAngle);
+        indicatorRef.current.setAttribute('x2', String(tip.x));
+        indicatorRef.current.setAttribute('y2', String(tip.y));
+      }
     };
 
     const onUp  = () => onConfirm();
@@ -114,18 +171,12 @@ export function RadialRotateMenu({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('keydown', onKey);
     };
-  }, [zoom, frontSide, onAngleChange, onConfirm, onCancel]);
+  }, [zoom, frontSide, cx, cy, r3, originalAngle, faceOffset, onAngleChange, onConfirm, onCancel]);
 
-  // Angle indicator line — points toward the front face of the furniture.
-  // We're inside <g transform="rotate(-currentAngle, cx, cy)"> in SelectionHandles,
-  // so local angle α maps to screen angle α - currentAngle.
-  // To appear at screen angle S, local angle must be S + currentAngle.
-  // Screen angle of the front face = currentAngle + FACE_ANGLE_OFFSET[frontSide].
-  // Therefore: localFaceAngle = (currentAngle + faceOffset) + currentAngle = faceOffset + 2*currentAngle
-  const faceOffset = FACE_ANGLE_OFFSET[frontSide ?? 'bottom'];
-  const localFaceAngle = (faceOffset + 2 * currentAngle) % 360;
-  const tip = polarToXY(cx, cy, r3 + 4 / zoom, localFaceAngle);
-  const fs  = Math.max(8, 10 / zoom);
+  // Initial tip for React-rendered line (will be overridden by DOM updates immediately)
+  const initFaceAngle = ((originalAngle + faceOffset) % 360 + 360) % 360;
+  const initLocalAngle = screenToLocalAngle(initFaceAngle, initFaceAngle);
+  const initTip = polarToXY(cx, cy, r3 + 4 / zoom, initLocalAngle);
 
   // Delta rotation (normalized to -180..180)
   const raw   = currentAngle - originalAngle;
@@ -133,38 +184,33 @@ export function RadialRotateMenu({
   const sign  = delta >= 0 ? '+' : '';
 
   const sw = 0.8 / zoom;
+  const fs = Math.max(8, 10 / zoom);
 
   return (
     <g style={{ pointerEvents: 'none' }}>
       {/* ── Outer white disc ── */}
       <circle cx={cx} cy={cy} r={r3} fill="white" stroke="rgba(0,0,0,0.15)" strokeWidth={sw} />
 
-      {/* ── Zone highlight fills (shown when pointer is in that zone) ── */}
-      {/* Zone 3 fill: r2 → r3 (5°) */}
+      {/* ── Zone highlight fills ── */}
       {activeZone === 3 && (
         <path
           d={`M ${cx} ${cy} m ${r3} 0 A ${r3} ${r3} 0 1 0 ${cx - r3} ${cy} A ${r3} ${r3} 0 1 0 ${cx + r3} ${cy} Z
               M ${cx} ${cy} m ${r2} 0 A ${r2} ${r2} 0 1 1 ${cx - r2} ${cy} A ${r2} ${r2} 0 1 1 ${cx + r2} ${cy} Z`}
-          fill={ZONE_HIGHLIGHT}
-          fillRule="evenodd"
+          fill={ZONE_HIGHLIGHT} fillRule="evenodd"
         />
       )}
-      {/* Zone 2 fill: r1 → r2 (45°) */}
       {activeZone === 2 && (
         <path
           d={`M ${cx} ${cy} m ${r2} 0 A ${r2} ${r2} 0 1 0 ${cx - r2} ${cy} A ${r2} ${r2} 0 1 0 ${cx + r2} ${cy} Z
               M ${cx} ${cy} m ${r1} 0 A ${r1} ${r1} 0 1 1 ${cx - r1} ${cy} A ${r1} ${r1} 0 1 1 ${cx + r1} ${cy} Z`}
-          fill={ZONE_HIGHLIGHT}
-          fillRule="evenodd"
+          fill={ZONE_HIGHLIGHT} fillRule="evenodd"
         />
       )}
-      {/* Zone 1 fill: r0 → r1 (90°) */}
       {activeZone === 1 && (
         <path
           d={`M ${cx} ${cy} m ${r1} 0 A ${r1} ${r1} 0 1 0 ${cx - r1} ${cy} A ${r1} ${r1} 0 1 0 ${cx + r1} ${cy} Z
               M ${cx} ${cy} m ${r0} 0 A ${r0} ${r0} 0 1 1 ${cx - r0} ${cy} A ${r0} ${r0} 0 1 1 ${cx + r0} ${cy} Z`}
-          fill={ZONE_HIGHLIGHT}
-          fillRule="evenodd"
+          fill={ZONE_HIGHLIGHT} fillRule="evenodd"
         />
       )}
 
@@ -201,9 +247,13 @@ export function RadialRotateMenu({
       {/* ── Inner dead-zone disc ── */}
       <circle cx={cx} cy={cy} r={r0} fill="white" stroke="rgba(0,0,0,0.15)" strokeWidth={sw} />
 
-      {/* ── Angle indicator line ── */}
-      <line x1={cx} y1={cy} x2={tip.x} y2={tip.y}
-        stroke="var(--color-primary)" strokeWidth={2 / zoom} strokeLinecap="round" />
+      {/* ── Angle indicator line — updated directly in DOM for lag-free tracking ── */}
+      <line
+        ref={indicatorRef}
+        x1={cx} y1={cy}
+        x2={initTip.x} y2={initTip.y}
+        stroke="var(--color-primary)" strokeWidth={2 / zoom} strokeLinecap="round"
+      />
 
       {/* ── Invisible anchor for getBoundingClientRect ── */}
       <circle id="radial-menu-center" cx={cx} cy={cy} r={r0 * 0.55}

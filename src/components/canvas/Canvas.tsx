@@ -9,14 +9,23 @@ export const Canvas = memo(function Canvas() {
   const room = usePlanStore((s) => s.room);
   const createRoomFromPoints = usePlanStore((s) => s.createRoomFromPoints);
   const fitRoomToCanvas = usePlanStore((s) => s.fitRoomToCanvas);
+  const removeDoor = usePlanStore((s) => s.removeDoor);
+  const removeWindow = usePlanStore((s) => s.removeWindow);
+  const removeColumn = usePlanStore((s) => s.removeColumn);
   const setSelectedItemId = useUiStore((s) => s.setSelectedItemId);
+  const selectedItemId = useUiStore((s) => s.selectedItemId);
   const isDrawingMode = useUiStore((s) => s.isDrawingMode);
   const setDrawingMode = useUiStore((s) => s.setDrawingMode);
+  const isMeasureMode = useUiStore((s) => s.isMeasureMode);
+  const measureLine = useUiStore((s) => s.measureLine);
+  const setMeasureLine = useUiStore((s) => s.setMeasureLine);
+  const measureDragRef = useRef<{ start: { x: number; y: number } } | null>(null);
 
   const svgRef = useRef<SVGSVGElement>(null);
   const [svgSize, setSvgSize] = useState({ w: 800, h: 600 });
   const [drawPoints, setDrawPoints] = useState<Array<{ x: number; y: number }>>([]);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const [pendingPoints, setPendingPoints] = useState<Array<{ x: number; y: number }> | null>(null);
 
   useEffect(() => {
     const update = () => {
@@ -34,6 +43,28 @@ export const Canvas = memo(function Canvas() {
   useEffect(() => {
     if (!isDrawingMode) setDrawPoints([]);
   }, [isDrawingMode]);
+
+  // Delete selected door / window / column with Backspace or Delete
+  useEffect(() => {
+    if (!selectedItemId || !room) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (room.doors.some((d) => d.id === selectedItemId)) {
+        removeDoor(selectedItemId);
+        setSelectedItemId(null);
+      } else if (room.windows.some((w) => w.id === selectedItemId)) {
+        removeWindow(selectedItemId);
+        setSelectedItemId(null);
+      } else if ((room.columns ?? []).some((c) => c.id === selectedItemId)) {
+        removeColumn(selectedItemId);
+        setSelectedItemId(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedItemId, room, removeDoor, removeWindow, removeColumn, setSelectedItemId]);
 
   const {
     canvas,
@@ -54,9 +85,63 @@ export const Canvas = memo(function Canvas() {
     return () => svg.removeEventListener('wheel', handler);
   }, [onWheel]);
 
+  // ── Orthogonalize: snap each point's incoming edge to H or V ─────────────
+  const orthogonalizePoints = (pts: Array<{ x: number; y: number }>) => {
+    if (pts.length < 2) return pts;
+    const result = [{ ...pts[0] }];
+    for (let i = 1; i < pts.length; i++) {
+      const prev = result[i - 1];
+      const curr = pts[i];
+      const dx = Math.abs(curr.x - prev.x);
+      const dy = Math.abs(curr.y - prev.y);
+      result.push(dx >= dy ? { x: curr.x, y: prev.y } : { x: prev.x, y: curr.y });
+    }
+    return result;
+  };
+
+  // ── Scale so longest edge = 500 cm ────────────────────────────────────────
+  const scaleToMaxEdge = (pts: Array<{ x: number; y: number }>, maxCm = 500) => {
+    let maxLen = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const j = (i + 1) % pts.length;
+      maxLen = Math.max(maxLen, Math.hypot(pts[j].x - pts[i].x, pts[j].y - pts[i].y));
+    }
+    if (maxLen < 1) return pts;
+    const scale = maxCm / maxLen;
+    const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+    const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+    return pts.map(p => ({ x: cx + (p.x - cx) * scale, y: cy + (p.y - cy) * scale }));
+  };
+
+  const confirmRoom = (pts: Array<{ x: number; y: number }>) => {
+    const scaled = scaleToMaxEdge(pts);
+    createRoomFromPoints(scaled);
+    const sw = svgRef.current?.getBoundingClientRect().width ?? 800;
+    const sh = svgRef.current?.getBoundingClientRect().height ?? 600;
+    fitRoomToCanvas(sw, sh);
+    setPendingPoints(null);
+  };
+
   const { zoom, panX, panY, viewRotation } = canvas;
   const cx = svgSize.w / 2;
   const cy = svgSize.h / 2;
+
+  // Snap a point to H/V if within DRAW_SNAP_DEG degrees of those axes
+  const DRAW_SNAP_DEG = 5;
+  const snapDrawPoint = (raw: { x: number; y: number }, prev: { x: number; y: number } | null) => {
+    if (!prev) return raw;
+    const dx = raw.x - prev.x;
+    const dy = raw.y - prev.y;
+    if (Math.hypot(dx, dy) < 0.1) return raw;
+    const angleDeg = Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
+    // Near horizontal: angle close to 0° or 180°
+    if (angleDeg <= DRAW_SNAP_DEG || angleDeg >= 180 - DRAW_SNAP_DEG)
+      return { x: raw.x, y: prev.y };
+    // Near vertical: angle close to 90°
+    if (Math.abs(angleDeg - 90) <= DRAW_SNAP_DEG)
+      return { x: prev.x, y: raw.y };
+    return raw;
+  };
 
   // Convert SVG client pos → cm coordinates
   const svgToCm = (clientX: number, clientY: number) => {
@@ -84,26 +169,34 @@ export const Canvas = memo(function Canvas() {
       const clientFirstY = firstPx.y + r.top;
       const dist = Math.hypot(e.clientX - clientFirstX, e.clientY - clientFirstY);
       if (dist < 12) {
-        // Close polygon
-        createRoomFromPoints(drawPoints);
-        const sw = svgRef.current?.getBoundingClientRect().width ?? 800;
-        const sh = svgRef.current?.getBoundingClientRect().height ?? 600;
-        fitRoomToCanvas(sw, sh);
+        // Close polygon — show orthogonalize dialog
+        setPendingPoints([...drawPoints]);
         setDrawingMode(false);
         setDrawPoints([]);
         return;
       }
     }
 
-    setDrawPoints((prev) => [...prev, cm]);
+    const lastPt = drawPoints.length > 0 ? drawPoints[drawPoints.length - 1] : null;
+    setDrawPoints((prev) => [...prev, snapDrawPoint(cm, lastPt)]);
   };
 
   const handleDrawMove = (e: React.PointerEvent<SVGSVGElement>) => {
     if (!isDrawingMode) return;
-    setCursorPos(svgToCm(e.clientX, e.clientY));
+    const raw = svgToCm(e.clientX, e.clientY);
+    const lastPt = drawPoints.length > 0 ? drawPoints[drawPoints.length - 1] : null;
+    setCursorPos(snapDrawPoint(raw, lastPt));
   };
 
   const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (isMeasureMode) {
+      e.stopPropagation();
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      const cm = svgToCm(e.clientX, e.clientY);
+      measureDragRef.current = { start: cm };
+      setMeasureLine({ start: cm, end: cm });
+      return;
+    }
     if (isDrawingMode) {
       handleDrawClick(e);
     } else {
@@ -113,11 +206,25 @@ export const Canvas = memo(function Canvas() {
   };
 
   const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (isMeasureMode) {
+      if (measureDragRef.current) {
+        setMeasureLine({ start: measureDragRef.current.start, end: svgToCm(e.clientX, e.clientY) });
+      }
+      return;
+    }
     if (isDrawingMode) {
       handleDrawMove(e);
     } else {
       onPointerMoveCanvas(e);
     }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (isMeasureMode) {
+      measureDragRef.current = null;
+      return;
+    }
+    onPointerUpCanvas(e);
   };
 
   return (
@@ -130,14 +237,14 @@ export const Canvas = memo(function Canvas() {
           background: 'var(--color-background)',
           display: 'block',
           touchAction: 'none',
-          cursor: isDrawingMode ? 'crosshair' : 'default',
+          cursor: (isDrawingMode || isMeasureMode) ? 'crosshair' : 'default',
           // Inject per-plan color overrides as CSS custom properties
           '--color-furniture-fill': canvas.furnitureColor,
           '--color-floor': canvas.floorColor,
         } as React.CSSProperties}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
-        onPointerUp={isDrawingMode ? undefined : onPointerUpCanvas}
+        onPointerUp={handlePointerUp}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
       >
@@ -182,6 +289,67 @@ export const Canvas = memo(function Canvas() {
             {room && (
               <Room room={room} viewRotation={viewRotation} zoom={zoom} canvasRef={svgRef} />
             )}
+
+            {/* Measure line overlay */}
+            {isMeasureMode && measureLine && (() => {
+              const x1 = cmToPx(measureLine.start.x);
+              const y1 = cmToPx(measureLine.start.y);
+              const x2 = cmToPx(measureLine.end.x);
+              const y2 = cmToPx(measureLine.end.y);
+              const distCm = Math.hypot(measureLine.end.x - measureLine.start.x, measureLine.end.y - measureLine.start.y);
+              const mx = (x1 + x2) / 2;
+              const my = (y1 + y2) / 2;
+              const angleDeg = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+              // Keep text upright
+              const textAngle = (angleDeg > 90 || angleDeg < -90) ? angleDeg + 180 : angleDeg;
+              const arrowSize = 6 / zoom; // arrowhead size in SVG units (compensate zoom)
+              const fontSize = 11 / zoom;
+              const markerId = 'measure-arrow';
+              return (
+                <g style={{ pointerEvents: 'none' }}>
+                  <defs>
+                    <marker id={markerId} markerWidth={arrowSize * 2} markerHeight={arrowSize * 2}
+                      refX={arrowSize} refY={arrowSize} orient="auto" markerUnits="userSpaceOnUse">
+                      <path
+                        d={`M ${arrowSize * 2} ${arrowSize} L 0 ${arrowSize * 0.35} L 0 ${arrowSize * 1.65} Z`}
+                        fill="var(--color-primary)"
+                      />
+                    </marker>
+                    <marker id={`${markerId}-start`} markerWidth={arrowSize * 2} markerHeight={arrowSize * 2}
+                      refX={arrowSize} refY={arrowSize} orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+                      <path
+                        d={`M ${arrowSize * 2} ${arrowSize} L 0 ${arrowSize * 0.35} L 0 ${arrowSize * 1.65} Z`}
+                        fill="var(--color-primary)"
+                      />
+                    </marker>
+                  </defs>
+                  <line x1={x1} y1={y1} x2={x2} y2={y2}
+                    stroke="var(--color-primary)" strokeWidth={1.5 / zoom}
+                    markerEnd={`url(#${markerId})`}
+                    markerStart={`url(#${markerId}-start)`}
+                  />
+                  {distCm > 1 && (
+                    <text
+                      x={mx} y={my}
+                      textAnchor="middle" dominantBaseline="auto"
+                      transform={`rotate(${textAngle}, ${mx}, ${my})`}
+                      dy={-4 / zoom}
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: `${fontSize}px`,
+                        fill: 'var(--color-primary)',
+                        userSelect: 'none',
+                      }}
+                    >
+                      {Math.round(distCm)} cm
+                    </text>
+                  )}
+                  {/* Endpoint dots */}
+                  <circle cx={x1} cy={y1} r={3 / zoom} fill="var(--color-primary)" />
+                  <circle cx={x2} cy={y2} r={3 / zoom} fill="var(--color-primary)" />
+                </g>
+              );
+            })()}
 
             {/* Free-draw preview */}
             {isDrawingMode && drawPoints.length > 0 && (
@@ -282,6 +450,59 @@ export const Canvas = memo(function Canvas() {
           {Math.round(zoom * 100)}%
         </text>
       </svg>
+
+      {/* Orthogonalize dialog — shown after polygon is closed */}
+      {pendingPoints && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.25)',
+          zIndex: 100,
+        }}>
+          <div style={{
+            background: 'var(--color-surface)',
+            border: '1px solid var(--color-border)',
+            borderRadius: '6px',
+            padding: '20px 24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+            minWidth: '260px',
+            boxShadow: 'var(--shadow-modal)',
+            fontFamily: 'var(--font-body)',
+          }}>
+            <p style={{ margin: 0, fontSize: '13px', color: 'var(--color-text)', lineHeight: 1.4 }}>
+              Tüm kenarlar dikey ve yatay olarak hizalansın mı?
+            </p>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => confirmRoom(orthogonalizePoints(pendingPoints))}
+                style={{
+                  flex: 1, padding: '8px 0',
+                  background: 'var(--color-primary)', color: '#fff',
+                  border: 'none', borderRadius: '4px',
+                  fontSize: '12px', cursor: 'pointer',
+                  fontFamily: 'var(--font-body)',
+                }}
+              >
+                Evet, hizala
+              </button>
+              <button
+                onClick={() => confirmRoom(pendingPoints)}
+                style={{
+                  flex: 1, padding: '8px 0',
+                  background: 'var(--color-surface-alt)', color: 'var(--color-text)',
+                  border: '1px solid var(--color-border)', borderRadius: '4px',
+                  fontSize: '12px', cursor: 'pointer',
+                  fontFamily: 'var(--font-body)',
+                }}
+              >
+                Olduğu gibi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 });

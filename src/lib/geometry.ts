@@ -1,5 +1,59 @@
 import { CM_TO_PX } from './constants';
-import type { Point, FurnitureFrontSide } from '../types';
+import type { Point, FurnitureFrontSide, Wall, Room } from '../types';
+
+/**
+ * Traversal-based signed area of the room polygon (via wall connections).
+ * Positive = CCW in screen space (Y-down), negative = CW.
+ */
+function roomTraversalSignedArea(room: Room): number {
+  if (room.walls.length === 0) return 0;
+  const wallFrom = new Map(room.walls.map(w => [w.startPointIndex, w]));
+  let cur = room.walls[0];
+  const startId = cur.id;
+  let sum = 0;
+  let count = 0;
+  do {
+    const a = room.points[cur.startPointIndex];
+    const b = room.points[cur.endPointIndex];
+    sum += a.x * b.y - b.x * a.y;
+    const next = wallFrom.get(cur.endPointIndex);
+    if (!next || next.id === startId || ++count > room.walls.length) break;
+    cur = next;
+  } while (true);
+  return sum / 2;
+}
+
+/**
+ * Returns true if the given endpoint of `wall` is a convex (outward) corner.
+ * atEnd=false → startPointIndex, atEnd=true → endPointIndex.
+ */
+export function isWallEndpointConvex(room: Room, wall: Wall, atEnd: boolean): boolean {
+  const ptIdx = atEnd ? wall.endPointIndex : wall.startPointIndex;
+  const curr = room.points[ptIdx];
+
+  let inVec: Point, outVec: Point;
+  if (atEnd) {
+    const from = room.points[wall.startPointIndex];
+    inVec = { x: curr.x - from.x, y: curr.y - from.y };
+    const nw = room.walls.find(w => w.startPointIndex === ptIdx && w.id !== wall.id);
+    if (!nw) return true;
+    const to = room.points[nw.endPointIndex];
+    outVec = { x: to.x - curr.x, y: to.y - curr.y };
+  } else {
+    const to = room.points[wall.endPointIndex];
+    outVec = { x: to.x - curr.x, y: to.y - curr.y };
+    const pw = room.walls.find(w => w.endPointIndex === ptIdx && w.id !== wall.id);
+    if (!pw) return true;
+    const from = room.points[pw.startPointIndex];
+    inVec = { x: curr.x - from.x, y: curr.y - from.y };
+  }
+
+  const cross = inVec.x * outVec.y - inVec.y * outVec.x;
+  const area = roomTraversalSignedArea(room);
+  // area > 0 (CCW screen): convex when cross > 0
+  // area < 0 (CW screen):  convex when cross < 0
+  return area > 0 ? cross > 0 : cross < 0;
+}
 
 export function distancePointToSegment(p: Point, a: Point, b: Point): number {
   const dx = b.x - a.x;

@@ -139,13 +139,29 @@ export function WallSegmentLabels({ wallId, wallStart, wallEnd, zoom }: Props) {
     items.push({ id: w.id, kind: 'window', startCm: ct - w.widthCm / 2, endCm: ct + w.widthCm / 2 });
   }
   for (const col of (room.columns ?? [])) {
-    if (!col.snappedToWall || col.snappedToWall.wallId !== wallId) continue;
-    const side = col.snappedToWall.side;
+    // Use physical proximity to support corner columns touching two walls
     const cxCm = col.position.x + col.widthCm / 2;
     const cyCm = col.position.y + col.depthCm / 2;
-    const halfW = (side === 'top' || side === 'bottom') ? col.widthCm / 2 : col.depthCm / 2;
-    const tAlong = (cxCm - Ax) * ux + (cyCm - Ay) * uy;
-    items.push({ id: col.id, kind: 'column', startCm: tAlong - halfW, endCm: tAlong + halfW });
+    const θ = (col.rotation * Math.PI) / 180;
+    const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
+    const hw = col.widthCm / 2, hd = col.depthCm / 2;
+    const corners = [
+      { lx: -hw, ly: -hd }, { lx: hw, ly: -hd },
+      { lx:  hw, ly:  hd }, { lx: -hw, ly:  hd },
+    ].map(({ lx, ly }) => ({
+      x: cxCm + lx * cosθ - ly * sinθ,
+      y: cyCm + lx * sinθ + ly * cosθ,
+    }));
+    const minPerp = Math.min(...corners.map(c => {
+      const dx = c.x - Ax, dy = c.y - Ay;
+      return Math.abs(dx * (-uy) + dy * ux);
+    }));
+    if (minPerp > 2) continue;
+    const ts = corners.map(c => (c.x - Ax) * ux + (c.y - Ay) * uy);
+    const startCm = Math.max(0, Math.min(...ts));
+    const endCm   = Math.min(wallLen, Math.max(...ts));
+    if (endCm - startCm < 0.5) continue;
+    items.push({ id: col.id, kind: 'column', startCm, endCm });
   }
 
   items.sort((a, b) => a.startCm - b.startCm);
@@ -199,10 +215,21 @@ export function WallSegmentLabels({ wallId, wallStart, wallEnd, zoom }: Props) {
             const isAlongWall = side === 'top' || side === 'bottom';
             const newWc = isAlongWall ? Math.max(5, newVal) : col.widthCm;
             const newDc = isAlongWall ? col.depthCm : Math.max(5, newVal);
+            // Start with the wall-perpendicular adjustment (keeps wall face flush)
+            let newPos = adjustColPosForDimChange(col, newWc, newDc);
+            // Additionally fix the along-wall STARTING edge to seg.startCm so the
+            // column grows from its starting edge rather than from its center.
+            const newHalfW = isAlongWall ? newWc / 2 : newDc / 2;
+            const newCxAfter = newPos.x + newWc / 2;
+            const newCyAfter = newPos.y + newDc / 2;
+            const newTAlong = (newCxAfter - Ax) * ux + (newCyAfter - Ay) * uy;
+            const desiredTAlong = seg.startCm + newHalfW;
+            const deltaAlong = desiredTAlong - newTAlong;
+            newPos = { x: newPos.x + deltaAlong * ux, y: newPos.y + deltaAlong * uy };
             updateColumn(seg.id!, {
               widthCm: newWc,
               depthCm: newDc,
-              position: adjustColPosForDimChange(col, newWc, newDc),
+              position: newPos,
             });
 
           } else if (seg.kind === 'gap') {

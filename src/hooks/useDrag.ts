@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import { usePlanStore } from '../store/planStore';
 import { useUiStore } from '../store/uiStore';
 import { useCatalogStore } from '../store/catalogStore';
@@ -179,6 +179,7 @@ export function useDrag() {
 
   const startMoveDrag = useCallback((e: React.PointerEvent, instance: FurnitureInstance, item: FurnitureCatalogItem) => {
     e.currentTarget.setPointerCapture(e.pointerId);
+    planStore.getState().saveSnapshot();
 
     const cvInfo = getCanvasSvgAndRect();
     const { canvas } = planStore.getState();
@@ -234,7 +235,8 @@ export function useDrag() {
     const itemMap = new Map(products.map((p) => [p.id, p]));
 
     // Pass the current rotation so snap preserves it and measures distances from rotated edges
-    const snap = computeSnap(pos, item, room, otherInstances, itemMap, rotation);
+    const snapRoom = canvas.snapEnabled !== false ? room : null;
+    const snap = computeSnap(pos, item, snapRoom, otherInstances, itemMap, rotation);
     updateSnapGuides(snap.guideLines, canvas.panX, canvas.panY, canvas.zoom);
 
     // Show ghost at the SNAPPED position (visual center), with the rotation applied
@@ -247,14 +249,14 @@ export function useDrag() {
   }, [planStore]);
 
   const onPointerUp = useCallback((e: PointerEvent) => {
+    removeGhost();
+    clearSnapGuides();
     if (!dragState.current) return;
 
     const state = planStore.getState();
     const { canvas, room, furnitureInstances } = state;
 
     const canvasSvg = document.querySelector('#canvas svg') as SVGSVGElement | null;
-    removeGhost();
-    clearSnapGuides();
 
     if (canvasSvg && room) {
       const r = canvasSvg.getBoundingClientRect();
@@ -276,7 +278,8 @@ export function useDrag() {
         const { products } = useCatalogStore.getState();
         const itemMap = new Map(products.map((p) => [p.id, p]));
 
-        const snap = computeSnap(pos, item, room, otherInstances, itemMap, rotation);
+        const snapRoom = canvas.snapEnabled !== false ? room : null;
+        const snap = computeSnap(pos, item, snapRoom, otherInstances, itemMap, rotation);
 
         if (dragState.current.mode === 'catalog') {
           const id = crypto.randomUUID();
@@ -301,13 +304,24 @@ export function useDrag() {
     dragState.current = null;
   }, [planStore, addFurnitureInstance, updateFurnitureInstance, setSelectedItemId]);
 
-  // Attach global pointer move/up listeners once
-  const attached = useRef(false);
-  if (!attached.current) {
-    attached.current = true;
+  // Attach global pointer listeners; clean up on unmount
+  useEffect(() => {
+    const cancel = () => {
+      removeGhost();
+      clearSnapGuides();
+      dragState.current = null;
+    };
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
-  }
+    window.addEventListener('pointercancel', cancel);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', cancel);
+      removeGhost();
+      clearSnapGuides();
+    };
+  }, [onPointerMove, onPointerUp]);
 
   return { startDrag, startMoveDrag };
 }

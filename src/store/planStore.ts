@@ -4,6 +4,14 @@ import type { PlanState, Room, Wall, FurnitureInstance, CanvasState, Point, Door
 import { segmentLength, segmentAngleDegrees, cmToPx, faceMidpointOffset } from '../lib/geometry';
 import { useCatalogStore } from './catalogStore';
 
+type HistorySnapshot = {
+  room: Room | null;
+  furnitureInstances: FurnitureInstance[];
+  customShapeInstances: CustomShapeInstance[];
+};
+
+const MAX_HISTORY = 10;
+
 interface PlanActions {
   setRoom: (room: Room | null) => void;
   createRoomFromTemplate: (type: RoomTemplate) => void;
@@ -30,6 +38,7 @@ interface PlanActions {
   toggleWallPin: (wallId: string) => void;
   translateWall: (wallId: string, delta: Point) => void;
   snapWallStraight: (wallId: string, direction: 'horizontal' | 'vertical') => void;
+  snapAllWallsStraight: () => void;
   moveRoomPoint: (pointIndex: number, newPosCm: Point) => void;
   setCanvasState: (canvas: Partial<CanvasState>) => void;
   fitRoomToCanvas: (canvasWidth: number, canvasHeight: number) => void;
@@ -40,6 +49,15 @@ interface PlanActions {
   removeCustomShapeInstance: (id: string) => void;
   rotateCustomShape: (id: string) => void;
   duplicateCustomShapeInstance: (id: string) => void;
+  // Undo / Redo
+  saveSnapshot: () => void;
+  undo: () => void;
+  redo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  // History stacks (not persisted)
+  undoStack: HistorySnapshot[];
+  redoStack: HistorySnapshot[];
 }
 
 export type RoomTemplate = 'rectangle' | 'square' | 'l-shape' | 'niche' | 'column' | 'angled';
@@ -53,6 +71,8 @@ const defaultCanvas: CanvasState = {
   furnitureColor: '#f5f0e8',
   floorColor: '#e8dcc8',   // açık parke
   showGrid: false,
+  snapEnabled: true,
+  wallsLocked: false,
 };
 
 const initialState: PlanState = {
@@ -183,9 +203,74 @@ export const usePlanStore = create<PlanState & PlanActions>()(
     (set, get) => ({
       ...initialState,
 
+      // ── History (not persisted) ───────────────────────────────────────────
+      undoStack: [] as HistorySnapshot[],
+      redoStack: [] as HistorySnapshot[],
+      canUndo: false,
+      canRedo: false,
+
+      saveSnapshot: () => {
+        const { room, furnitureInstances, customShapeInstances, undoStack } = get();
+        const snapshot: HistorySnapshot = {
+          room: room ? JSON.parse(JSON.stringify(room)) : null,
+          furnitureInstances: JSON.parse(JSON.stringify(furnitureInstances)),
+          customShapeInstances: JSON.parse(JSON.stringify(customShapeInstances)),
+        };
+        const newStack = [...undoStack, snapshot];
+        if (newStack.length > MAX_HISTORY) newStack.shift();
+        set({ undoStack: newStack, redoStack: [], canUndo: true, canRedo: false });
+      },
+
+      undo: () => {
+        const { undoStack, redoStack, room, furnitureInstances, customShapeInstances } = get();
+        if (undoStack.length === 0) return;
+        const current: HistorySnapshot = {
+          room: room ? JSON.parse(JSON.stringify(room)) : null,
+          furnitureInstances: JSON.parse(JSON.stringify(furnitureInstances)),
+          customShapeInstances: JSON.parse(JSON.stringify(customShapeInstances)),
+        };
+        const newRedoStack = [...redoStack, current];
+        if (newRedoStack.length > MAX_HISTORY) newRedoStack.shift();
+        const newUndoStack = [...undoStack];
+        const prev = newUndoStack.pop()!;
+        set({
+          room: prev.room,
+          furnitureInstances: prev.furnitureInstances,
+          customShapeInstances: prev.customShapeInstances,
+          undoStack: newUndoStack,
+          redoStack: newRedoStack,
+          canUndo: newUndoStack.length > 0,
+          canRedo: true,
+        });
+      },
+
+      redo: () => {
+        const { undoStack, redoStack, room, furnitureInstances, customShapeInstances } = get();
+        if (redoStack.length === 0) return;
+        const current: HistorySnapshot = {
+          room: room ? JSON.parse(JSON.stringify(room)) : null,
+          furnitureInstances: JSON.parse(JSON.stringify(furnitureInstances)),
+          customShapeInstances: JSON.parse(JSON.stringify(customShapeInstances)),
+        };
+        const newUndoStack = [...undoStack, current];
+        if (newUndoStack.length > MAX_HISTORY) newUndoStack.shift();
+        const newRedoStack = [...redoStack];
+        const next = newRedoStack.pop()!;
+        set({
+          room: next.room,
+          furnitureInstances: next.furnitureInstances,
+          customShapeInstances: next.customShapeInstances,
+          undoStack: newUndoStack,
+          redoStack: newRedoStack,
+          canUndo: true,
+          canRedo: newRedoStack.length > 0,
+        });
+      },
+
       setRoom: (room) => set({ room }),
 
       createRoomFromTemplate: (type) => {
+        get().saveSnapshot();
         const points = templatePoints(type);
         const room = buildRoom(points);
         set((s) => ({
@@ -197,6 +282,7 @@ export const usePlanStore = create<PlanState & PlanActions>()(
       },
 
       updateWallLength: (wallId, newLengthCm, canvasWidth, canvasHeight) => {
+        get().saveSnapshot();
         const state = get();
         if (!state.room) return { blocked: false };
         const wall = state.room.walls.find((w) => w.id === wallId);
@@ -277,8 +363,10 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         });
       },
 
-      addFurnitureInstance: (instance) =>
-        set((s) => ({ furnitureInstances: [...s.furnitureInstances, instance] })),
+      addFurnitureInstance: (instance) => {
+        get().saveSnapshot();
+        set((s) => ({ furnitureInstances: [...s.furnitureInstances, instance] }));
+      },
 
       updateFurnitureInstance: (id, updates) =>
         set((s) => ({
@@ -287,28 +375,35 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           ),
         })),
 
-      removeFurnitureInstance: (id) =>
+      removeFurnitureInstance: (id) => {
+        get().saveSnapshot();
         set((s) => ({
           furnitureInstances: s.furnitureInstances.filter((fi) => fi.id !== id),
-        })),
+        }));
+      },
 
-      rotateFurniture: (id) =>
+      rotateFurniture: (id) => {
+        get().saveSnapshot();
         set((s) => ({
           furnitureInstances: s.furnitureInstances.map((fi) => {
             if (fi.id !== id) return fi;
             const newRotation = (fi.rotation + 90) % 360;
             return { ...fi, rotation: newRotation };
           }),
-        })),
+        }));
+      },
 
-      rotateFurnitureToAngle: (id, angleDeg) =>
+      rotateFurnitureToAngle: (id, angleDeg) => {
+        get().saveSnapshot();
         set((s) => ({
           furnitureInstances: s.furnitureInstances.map((fi) =>
             fi.id === id ? { ...fi, rotation: ((angleDeg % 360) + 360) % 360 } : fi
           ),
-        })),
+        }));
+      },
 
       duplicateFurnitureInstance: (id) => {
+        get().saveSnapshot();
         const state = get();
         const instance = state.furnitureInstances.find((fi) => fi.id === id);
         if (!instance) return;
@@ -320,11 +415,13 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         set({ furnitureInstances: [...state.furnitureInstances, copy] });
       },
 
-      addDoor: (door) =>
+      addDoor: (door) => {
+        get().saveSnapshot();
         set((s) => {
           if (!s.room) return s;
           return { room: { ...s.room, doors: [...s.room.doors, door] } };
-        }),
+        });
+      },
 
       updateDoor: (id, updates) =>
         set((s) => {
@@ -332,17 +429,21 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           return { room: { ...s.room, doors: s.room.doors.map((d) => d.id === id ? { ...d, ...updates } : d) } };
         }),
 
-      removeDoor: (id) =>
+      removeDoor: (id) => {
+        get().saveSnapshot();
         set((s) => {
           if (!s.room) return s;
           return { room: { ...s.room, doors: s.room.doors.filter((d) => d.id !== id) } };
-        }),
+        });
+      },
 
-      addWindow: (window) =>
+      addWindow: (window) => {
+        get().saveSnapshot();
         set((s) => {
           if (!s.room) return s;
           return { room: { ...s.room, windows: [...s.room.windows, window] } };
-        }),
+        });
+      },
 
       updateWindow: (id, updates) =>
         set((s) => {
@@ -350,17 +451,21 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           return { room: { ...s.room, windows: s.room.windows.map((w) => w.id === id ? { ...w, ...updates } : w) } };
         }),
 
-      removeWindow: (id) =>
+      removeWindow: (id) => {
+        get().saveSnapshot();
         set((s) => {
           if (!s.room) return s;
           return { room: { ...s.room, windows: s.room.windows.filter((w) => w.id !== id) } };
-        }),
+        });
+      },
 
-      addColumn: (column) =>
+      addColumn: (column) => {
+        get().saveSnapshot();
         set((s) => {
           if (!s.room) return s;
           return { room: { ...s.room, columns: [...(s.room.columns ?? []), column] } };
-        }),
+        });
+      },
 
       updateColumn: (id, updates) =>
         set((s) => {
@@ -368,13 +473,16 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           return { room: { ...s.room, columns: (s.room.columns ?? []).map((c) => c.id === id ? { ...c, ...updates } : c) } };
         }),
 
-      removeColumn: (id) =>
+      removeColumn: (id) => {
+        get().saveSnapshot();
         set((s) => {
           if (!s.room) return s;
           return { room: { ...s.room, columns: (s.room.columns ?? []).filter((c) => c.id !== id) } };
-        }),
+        });
+      },
 
       createRoomFromPoints: (points) => {
+        get().saveSnapshot();
         const room = buildRoom(points);
         set((s) => ({
           room,
@@ -383,8 +491,9 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         }));
       },
 
-      addAngleConstraint: (sharedPointIndex, angleDeg) =>
-        set((s) => {
+      addAngleConstraint: (sharedPointIndex, angleDeg) => {
+        get().saveSnapshot();
+        return set((s) => {
           if (!s.room) return s;
 
           // Find the two walls that meet at this corner
@@ -450,13 +559,16 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           const filtered = s.room.constraints.filter((c) => c.sharedPointIndex !== sharedPointIndex);
           const constraint = { id: makeId(), type: 'angle' as const, sharedPointIndex, angleDeg };
           return { room: { ...s.room, points: newPoints, constraints: [...filtered, constraint] } };
-        }),
+        });
+      },
 
-      removeConstraint: (constraintId) =>
+      removeConstraint: (constraintId) => {
+        get().saveSnapshot();
         set((s) => {
           if (!s.room) return s;
           return { room: { ...s.room, constraints: s.room.constraints.filter((c) => c.id !== constraintId) } };
-        }),
+        });
+      },
 
       toggleWallPin: (wallId) =>
         set((s) => {
@@ -580,6 +692,7 @@ export const usePlanStore = create<PlanState & PlanActions>()(
       },
 
       snapWallStraight: (wallId, direction) => {
+        get().saveSnapshot();
         const state = get();
         if (!state.room) return;
 
@@ -661,6 +774,43 @@ export const usePlanStore = create<PlanState & PlanActions>()(
         const newPoints = state.room.points.map((p, i) =>
           i === moveIdx ? newMovePt : p
         );
+
+        set({ room: { ...state.room, points: newPoints } });
+      },
+
+      snapAllWallsStraight: () => {
+        get().saveSnapshot();
+        const state = get();
+        if (!state.room) return;
+
+        const newPoints = state.room.points.map((p) => ({ ...p }));
+
+        // Build a traversal order: follow startPointIndex → endPointIndex chain
+        const wallFrom = new Map<number, typeof state.room.walls[0]>();
+        for (const w of state.room.walls) wallFrom.set(w.startPointIndex, w);
+
+        // Find starting point
+        const firstWall = state.room.walls[0];
+        if (!firstWall) return;
+
+        // For each wall: snap the end point to H or V relative to its start point
+        let visited = 0;
+        let curWall: typeof firstWall | undefined = firstWall;
+        while (curWall && visited < state.room.walls.length) {
+          const startPt = newPoints[curWall.startPointIndex];
+          const endPt   = newPoints[curWall.endPointIndex];
+          const dx = endPt.x - startPt.x;
+          const dy = endPt.y - startPt.y;
+          if (Math.abs(dx) >= Math.abs(dy)) {
+            // Snap to horizontal: fix y of end to start's y
+            newPoints[curWall.endPointIndex] = { x: endPt.x, y: startPt.y };
+          } else {
+            // Snap to vertical: fix x of end to start's x
+            newPoints[curWall.endPointIndex] = { x: startPt.x, y: endPt.y };
+          }
+          curWall = wallFrom.get(curWall.endPointIndex);
+          visited++;
+        }
 
         set({ room: { ...state.room, points: newPoints } });
       },
@@ -971,8 +1121,10 @@ export const usePlanStore = create<PlanState & PlanActions>()(
       resetPlan: () => set(initialState),
 
       // ── Custom shapes ─────────────────────────────────────────────────
-      addCustomShapeInstance: (instance) =>
-        set((s) => ({ customShapeInstances: [...s.customShapeInstances, instance] })),
+      addCustomShapeInstance: (instance) => {
+        get().saveSnapshot();
+        set((s) => ({ customShapeInstances: [...s.customShapeInstances, instance] }));
+      },
 
       updateCustomShapeInstance: (id, updates) =>
         set((s) => ({
@@ -981,19 +1133,24 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           ),
         })),
 
-      removeCustomShapeInstance: (id) =>
+      removeCustomShapeInstance: (id) => {
+        get().saveSnapshot();
         set((s) => ({
           customShapeInstances: s.customShapeInstances.filter((cs) => cs.id !== id),
-        })),
+        }));
+      },
 
-      rotateCustomShape: (id) =>
+      rotateCustomShape: (id) => {
+        get().saveSnapshot();
         set((s) => ({
           customShapeInstances: s.customShapeInstances.map((cs) =>
             cs.id === id ? { ...cs, rotation: (cs.rotation + 90) % 360 } : cs
           ),
-        })),
+        }));
+      },
 
       duplicateCustomShapeInstance: (id) => {
+        get().saveSnapshot();
         const state = get();
         const instance = state.customShapeInstances.find((cs) => cs.id === id);
         if (!instance) return;
@@ -1007,6 +1164,11 @@ export const usePlanStore = create<PlanState & PlanActions>()(
     }),
     {
       name: 'frp-plan-state',
+      partialize: (state) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { undoStack, redoStack, canUndo, canRedo, ...rest } = state;
+        return rest;
+      },
       onRehydrateStorage: () => (state) => {
         if (!state || state.version !== 1) {
           return initialState;
