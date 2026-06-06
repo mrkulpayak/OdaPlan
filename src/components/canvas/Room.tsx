@@ -673,7 +673,7 @@ export const Room = memo(function Room({ room, viewRotation, zoom, canvasRef }: 
             <div style={{ fontSize: '10px', color: '#888', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>Köşe açısı</span>
               {cornerExistingConstraint && (
-                <span style={{ color: 'var(--color-primary)', fontWeight: 600 }}>
+                <span style={{ color: '#555', fontWeight: 600 }}>
                   Kilitli: {cornerExistingConstraint.angleDeg ?? 90}°
                 </span>
               )}
