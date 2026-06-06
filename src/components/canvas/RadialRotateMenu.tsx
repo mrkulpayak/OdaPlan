@@ -78,6 +78,8 @@ export function RadialRotateMenu({
   const [activeZone, setActiveZone] = useState<Zone>(0);
 
   useEffect(() => {
+    const faceOffset = FACE_ANGLE_OFFSET[frontSide ?? 'bottom'];
+
     const onMove = (e: PointerEvent) => {
       const el = document.getElementById('radial-menu-center');
       if (!el) return;
@@ -92,8 +94,13 @@ export function RadialRotateMenu({
 
       const step = stepForZone(zone);
       if (step === null) return;
-      const snapped = ((snapTo(Math.atan2(dy, dx) * (180 / Math.PI), step) % 360) + 360) % 360;
-      onAngleChange(snapped);
+      // Snap the FACE direction (= mouse direction) then convert to furniture rotation:
+      //   rotation = faceAngle - faceOffset
+      // This makes the front face point toward the mouse.
+      const rawMouseAngle = Math.atan2(dy, dx) * (180 / Math.PI);
+      const snappedFaceAngle = ((snapTo(rawMouseAngle, step) % 360) + 360) % 360;
+      const rotation = ((snappedFaceAngle - faceOffset) % 360 + 360) % 360;
+      onAngleChange(rotation);
     };
 
     const onUp  = () => onConfirm();
@@ -107,11 +114,17 @@ export function RadialRotateMenu({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('keydown', onKey);
     };
-  }, [zoom, onAngleChange, onConfirm, onCancel]);
+  }, [zoom, frontSide, onAngleChange, onConfirm, onCancel]);
 
-  // Angle indicator line — points toward the front face of the furniture
-  const faceAngle = (currentAngle + FACE_ANGLE_OFFSET[frontSide]) % 360;
-  const tip = polarToXY(cx, cy, r3 + 4 / zoom, faceAngle);
+  // Angle indicator line — points toward the front face of the furniture.
+  // We're inside <g transform="rotate(-currentAngle, cx, cy)"> in SelectionHandles,
+  // so local angle α maps to screen angle α - currentAngle.
+  // To appear at screen angle S, local angle must be S + currentAngle.
+  // Screen angle of the front face = currentAngle + FACE_ANGLE_OFFSET[frontSide].
+  // Therefore: localFaceAngle = (currentAngle + faceOffset) + currentAngle = faceOffset + 2*currentAngle
+  const faceOffset = FACE_ANGLE_OFFSET[frontSide ?? 'bottom'];
+  const localFaceAngle = (faceOffset + 2 * currentAngle) % 360;
+  const tip = polarToXY(cx, cy, r3 + 4 / zoom, localFaceAngle);
   const fs  = Math.max(8, 10 / zoom);
 
   // Delta rotation (normalized to -180..180)

@@ -171,74 +171,16 @@ export function computeSnap(
   }
   if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
 
-  // ── Priority 2: wall/column snap + furniture-to-furniture snap (compete together) ─
+  // ── Priority 2: furniture-to-furniture snap ───────────────────────────────
   //
-  // Wall/column snap:
-  //   For each snap segment (room wall or column face) × each furniture face:
-  //   1. Measure distance from the CURRENT-rotation face midpoint to the segment.
-  //   2. If within SNAP_DISTANCE_CM and best so far, compute flush rotation and snap.
+  // This runs BEFORE wall snap so that wall-snapped furniture can still snap
+  // to adjacent wall-snapped furniture. If wall snap ran first, its 0cm distance
+  // would always beat furniture snap, making it impossible to align two items
+  // that are both against walls.
   //
-  // Furniture-to-furniture snap uses a SHORTER threshold (FURN_SNAP = SNAP_DISTANCE_CM/2)
-  // so it only fires when very close. Both compete: the smaller distance wins.
-  // ──────────────────────────────────────────────────────────────────────────────
-  const mids = rotatedSideMidpoints(pos, w, d, currentRotation);
-  const sideEntries = Object.entries(mids) as Array<[FurnitureFrontSide, { x: number; y: number }]>;
-
-  // Build list of snap segments: room walls + column faces
-  type SnapSeg = { a: { x: number; y: number }; b: { x: number; y: number }; wallId?: string };
-  const snapSegs: SnapSeg[] = [
-    ...room.walls.map((wall) => ({
-      a: room.points[wall.startPointIndex],
-      b: room.points[wall.endPointIndex],
-      wallId: wall.id,
-    })),
-    ...(room.columns ?? []).flatMap((col) =>
-      columnFaceSegments(col).map((seg) => ({ ...seg, wallId: undefined }))
-    ),
-  ];
-
-  for (const seg of snapSegs) {
-    const { a, b } = seg;
-    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
-    if (segLen < 1) continue;
-
-    const ux = (b.x - a.x) / segLen;
-    const uy = (b.y - a.y) / segLen;
-    const nx = -uy;
-    const ny =  ux;
-
-    const reqRot = flushRotations(nx, ny);
-
-    for (const [side, midpoint] of sideEntries) {
-      const dist = distancePointToSegment(midpoint, a, b);
-      if (dist >= bestDist || dist > SNAP_DISTANCE_CM) continue;
-
-      const newRotation = reqRot[side];
-      const newMids = rotatedSideMidpoints(pos, w, d, newRotation);
-      const newMid  = newMids[side];
-      const wallPt  = closestPointOnSegment(newMid, a, b);
-
-      const cx = pos.x + w / 2;
-      const cy = pos.y + d / 2;
-      const rdx = newMid.x - cx;
-      const rdy = newMid.y - cy;
-
-      const newCenter  = { x: wallPt.x - rdx, y: wallPt.y - rdy };
-      const snappedPos = { x: newCenter.x - w / 2, y: newCenter.y - d / 2 };
-
-      bestDist  = dist;
-      bestResult = {
-        position:  snappedPos,
-        rotation:  newRotation,
-        snappedTo: seg.wallId ? { wallId: seg.wallId, side } : undefined,
-        guideLines: [{ x1: a.x, y1: a.y, x2: b.x, y2: b.y }],
-      };
-    }
-  }
-
-  // ── Furniture-to-furniture snap (shorter threshold, competes with wall/column snap) ─
   // Uses axis-aligned bounding boxes — works correctly when rotation=0 or 90°.
-  // Threshold is half of SNAP_DISTANCE_CM so it wins only when very close to another item.
+  // Threshold: SNAP_DISTANCE_CM / 2 (5cm) — shorter than wall snap (10cm).
+  // If furniture snap fires, return immediately (before wall snap).
   const FURN_SNAP = SNAP_DISTANCE_CM / 2;
   for (const other of otherInstances) {
     const otherItem = otherItems.get(other.catalogItemId);
@@ -281,8 +223,74 @@ export function computeSnap(
       }
     }
   }
+  // If furniture snap found a result, return early (beats wall snap)
+  if (bestResult && bestDist <= FURN_SNAP) return bestResult;
 
-  if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
+  // ── Priority 3: wall/column snap (translate + rotate flush) ──────────────
+  //
+  // Runs only if no furniture snap fired. Threshold: SNAP_DISTANCE_CM (10cm).
+  //
+  // For each snap segment (room wall or column face) × each furniture face:
+  //   1. Measure distance from the CURRENT-rotation face midpoint to the segment.
+  //   2. If within snap distance, compute flush rotation and snap position.
+  const mids = rotatedSideMidpoints(pos, w, d, currentRotation);
+  const sideEntries = Object.entries(mids) as Array<[FurnitureFrontSide, { x: number; y: number }]>;
+
+  type SnapSeg = { a: { x: number; y: number }; b: { x: number; y: number }; wallId?: string };
+  const snapSegs: SnapSeg[] = [
+    ...room.walls.map((wall) => ({
+      a: room.points[wall.startPointIndex],
+      b: room.points[wall.endPointIndex],
+      wallId: wall.id,
+    })),
+    ...(room.columns ?? []).flatMap((col) =>
+      columnFaceSegments(col).map((seg) => ({ ...seg, wallId: undefined }))
+    ),
+  ];
+
+  // Reset bestDist so wall snap uses its own threshold independently
+  let wallBestDist = SNAP_DISTANCE_CM + 1;
+  let wallBestResult: SnapResult | null = null;
+
+  for (const seg of snapSegs) {
+    const { a, b } = seg;
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    if (segLen < 1) continue;
+
+    const ux = (b.x - a.x) / segLen;
+    const uy = (b.y - a.y) / segLen;
+    const nx = -uy;
+    const ny =  ux;
+
+    const reqRot = flushRotations(nx, ny);
+
+    for (const [side, midpoint] of sideEntries) {
+      const dist = distancePointToSegment(midpoint, a, b);
+      if (dist >= wallBestDist || dist > SNAP_DISTANCE_CM) continue;
+
+      const newRotation = reqRot[side];
+      const newMids = rotatedSideMidpoints(pos, w, d, newRotation);
+      const newMid  = newMids[side];
+      const wallPt  = closestPointOnSegment(newMid, a, b);
+
+      const cx = pos.x + w / 2;
+      const cy = pos.y + d / 2;
+      const rdx = newMid.x - cx;
+      const rdy = newMid.y - cy;
+
+      const newCenter  = { x: wallPt.x - rdx, y: wallPt.y - rdy };
+      const snappedPos = { x: newCenter.x - w / 2, y: newCenter.y - d / 2 };
+
+      wallBestDist  = dist;
+      wallBestResult = {
+        position:  snappedPos,
+        rotation:  newRotation,
+        snappedTo: seg.wallId ? { wallId: seg.wallId, side } : undefined,
+        guideLines: [{ x1: a.x, y1: a.y, x2: b.x, y2: b.y }],
+      };
+    }
+  }
+  if (wallBestResult && wallBestDist <= SNAP_DISTANCE_CM) return wallBestResult;
 
   // No snap — preserve current position and rotation
   return { position: pos, rotation: currentRotation, guideLines: [] };
