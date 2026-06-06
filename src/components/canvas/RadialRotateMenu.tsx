@@ -69,7 +69,7 @@ function polarToXY(cx: number, cy: number, r: number, angleDeg: number) {
 }
 
 /** Highlight color for the active zone ring */
-const ZONE_HIGHLIGHT = 'rgba(59,130,246,0.12)';
+const ZONE_HIGHLIGHT = 'rgba(59,130,246,0.10)';
 
 export function RadialRotateMenu({
   cx, cy, currentAngle, originalAngle, frontSide = 'bottom', zoom,
@@ -84,6 +84,8 @@ export function RadialRotateMenu({
 
   // Indicator line ref — updated directly in onMove to avoid React re-render lag
   const indicatorRef = useRef<SVGLineElement>(null);
+  // Tracks the last snapped face angle so dead-zone doesn't drift from furniture front
+  const lastSnappedFaceAngleRef = useRef<number>(((originalAngle + FACE_ANGLE_OFFSET[frontSide ?? 'bottom']) % 360 + 360) % 360);
 
   // Compute initial indicator local angle (screen angle → local angle accounting for rotate(-rotation))
   // screen angle of front face = originalAngle + faceOffset
@@ -134,16 +136,17 @@ export function RadialRotateMenu({
       const rawMouseAngle = Math.atan2(dy, dx) * (180 / Math.PI);
       const step = stepForZone(zone);
 
-      // The indicator always tracks the mouse (snapped to step when outside dead zone)
+      // The indicator tracks the snapped furniture-front angle
       let snappedFaceAngle: number;
       if (step === null) {
-        // Dead zone: indicator follows mouse freely, but rotation doesn't change
-        snappedFaceAngle = ((rawMouseAngle % 360) + 360) % 360;
+        // Dead zone: keep indicator pointing at the furniture's current front (don't follow mouse)
+        snappedFaceAngle = lastSnappedFaceAngleRef.current;
       } else {
         // Snap face direction to nearest multiple of step
         snappedFaceAngle = ((snapTo(rawMouseAngle, step) % 360) + 360) % 360;
         // Update furniture rotation: rotation = faceAngle - faceOffset
         const rotation = ((snappedFaceAngle - fo) % 360 + 360) % 360;
+        lastSnappedFaceAngleRef.current = snappedFaceAngle;
         onAngleChange(rotation);
       }
 
@@ -188,8 +191,8 @@ export function RadialRotateMenu({
 
   return (
     <g style={{ pointerEvents: 'none' }}>
-      {/* ── Outer white disc ── */}
-      <circle cx={cx} cy={cy} r={r3} fill="white" stroke="rgba(0,0,0,0.15)" strokeWidth={sw} />
+      {/* ── Outer disc — 75% opaque ── */}
+      <circle cx={cx} cy={cy} r={r3} fill="rgba(255,255,255,0.75)" stroke="rgba(0,0,0,0.15)" strokeWidth={sw} />
 
       {/* ── Zone highlight fills ── */}
       {activeZone === 3 && (
@@ -244,8 +247,8 @@ export function RadialRotateMenu({
           stroke="rgba(0,0,0,0.52)" strokeWidth={1.4 / zoom} strokeLinecap="round" />;
       })}
 
-      {/* ── Inner dead-zone disc ── */}
-      <circle cx={cx} cy={cy} r={r0} fill="white" stroke="rgba(0,0,0,0.15)" strokeWidth={sw} />
+      {/* ── Inner dead-zone disc — 75% opaque ── */}
+      <circle cx={cx} cy={cy} r={r0} fill="rgba(255,255,255,0.75)" stroke="rgba(0,0,0,0.15)" strokeWidth={sw} />
 
       {/* ── Angle indicator line — updated directly in DOM for lag-free tracking ── */}
       <line
