@@ -122,9 +122,6 @@ export function PlannerPage({ session }: Props) {
   const isMeasureMode = useUiStore((s) => s.isMeasureMode);
   const setMeasureMode = useUiStore((s) => s.setMeasureMode);
 
-  const toggleDimensions = () => {
-    setCanvasState({ showDimensionsOnExport: !canvas.showDimensionsOnExport });
-  };
 
   const toggleGrid = () => {
     setCanvasState({ showGrid: !canvas.showGrid });

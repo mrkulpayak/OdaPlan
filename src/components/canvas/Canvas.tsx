@@ -219,12 +219,12 @@ export const Canvas = memo(function Canvas() {
     }
   };
 
-  const handlePointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
+  const handlePointerUp = (_e: React.PointerEvent<SVGSVGElement>) => {
     if (isMeasureMode) {
       measureDragRef.current = null;
       return;
     }
-    onPointerUpCanvas(e);
+    onPointerUpCanvas();
   };
 
   return (

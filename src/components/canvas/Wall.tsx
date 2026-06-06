@@ -26,7 +26,7 @@ interface Props {
 }
 
 export const Wall = memo(function Wall({
-  wall, points, doors, windows, wallColumns, viewRotation, zoom, isSelected,
+  wall, points, doors, windows, wallColumns, viewRotation, zoom,
   onCommitLength, onToggleLock, onTogglePin, onWallClick, isDraggable, wallsLocked,
 }: Props) {
   const aCm = points[wall.startPointIndex];
