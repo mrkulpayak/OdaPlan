@@ -6,6 +6,7 @@ import { usePlanStore } from '../../store/planStore';
 import { computeSnap } from '../../hooks/useSnap';
 import { useCatalogStore } from '../../store/catalogStore';
 import { SelectionHandles } from './SelectionHandles';
+import { RadialRotateMenu } from './RadialRotateMenu';
 import {
   shapePolygonCm,
   polygonToSVGPoints,
@@ -56,6 +57,9 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
 
   const [isEditing, setIsEditing] = useState(false);
   const [editDims, setEditDims]   = useState<Record<string, number>>(instance.dims);
+  const [radialActive, setRadialActive] = useState(false);
+  const [radialAngle,  setRadialAngle]  = useState(0);
+  const originalAngleRef = useRef(0);
   // Panel position in viewport coords (fixed)
   const [panelPos, setPanelPos] = useState<{ x: number; y: number } | null>(null);
   const panelDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
@@ -65,9 +69,9 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
     setEditDims(instance.dims);
   }, [instance.dims]);
 
-  // Close editor when deselected
+  // Close editor/radial when deselected
   useEffect(() => {
-    if (!isSelected) setIsEditing(false);
+    if (!isSelected) { setIsEditing(false); setRadialActive(false); }
   }, [isSelected]);
 
   // ── Keyboard delete ───────────────────────────────────────────
@@ -311,15 +315,43 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
           depthCm={bbox.h}
           rotation={instance.rotation}
           zoom={zoom}
+          radialActive={radialActive}
           onStartMoveDrag={handleStartMove}
           onRotate90={() => rotateCustomShape(instance.id)}
-          onRotateToAngle={(a) => updateCustomShapeInstance(instance.id, { rotation: ((a % 360) + 360) % 360 })}
           onDelete={() => { removeCustomShapeInstance(instance.id); setSelectedItemId(null); }}
           onDuplicate={() => duplicateCustomShapeInstance(instance.id)}
+          onOpenRadial={() => {
+            originalAngleRef.current = instance.rotation;
+            setRadialAngle(instance.rotation);
+            setRadialActive(true);
+          }}
         />
       )}
 
     </g>
+
+    {/* Radial rotate menu — outside the rotate group so it stays upright */}
+    {isSelected && radialActive && (() => {
+      const xPx = cmToPx(x + bbox.w / 2);
+      const yPx = cmToPx(y + bbox.h / 2);
+      return (
+        <RadialRotateMenu
+          cx={xPx} cy={yPx}
+          currentAngle={radialAngle}
+          originalAngle={originalAngleRef.current}
+          zoom={zoom}
+          onAngleChange={(ang) => {
+            setRadialAngle(ang);
+            updateCustomShapeInstance(instance.id, { rotation: ang });
+          }}
+          onConfirm={() => setRadialActive(false)}
+          onCancel={() => {
+            updateCustomShapeInstance(instance.id, { rotation: originalAngleRef.current });
+            setRadialActive(false);
+          }}
+        />
+      );
+    })()}
 
     {/* ── Dimension editor — portal to body, fixed position ─────── */}
     {isEditing && panelPos && createPortal(
