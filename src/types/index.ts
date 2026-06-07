@@ -79,8 +79,9 @@ export type FurnitureFrontSide = 'top' | 'right' | 'bottom' | 'left';
 
 export type FurnitureCategory =
   | 'Koltuk' | 'Berjer' | 'Sehpa' | 'Yemek Masası' | 'Sandalye'
-  | 'Konsol' | 'TV Ünitesi' | 'Yatak' | 'Komodin' | 'Gardırop'
-  | 'Şifonyer' | 'Dolap' | 'Mutfak Köşe' | 'Özel';
+  | 'Konsol' | 'TV Ünitesi' | 'Büfe' | 'Kitaplık' | 'Çalışma Masası'
+  | 'Yatak' | 'Komodin' | 'Gardırop' | 'Şifonyer' | 'Dresuar'
+  | 'Dolap' | 'Mutfak Köşe' | 'Özel';
 
 export interface FurnitureCatalogItem {
   id: string;
@@ -93,6 +94,7 @@ export interface FurnitureCatalogItem {
   frontSide: FurnitureFrontSide;
   widthCm: number;
   depthCm: number;
+  colorFamily?: string; // 'Beyaz' | 'Antrasit' | 'Ceviz' | 'Bej' | 'Siyah' | 'Meşe' | 'Gri'
   params: Record<string, unknown> | null;
   isGlobal: boolean;
 }
@@ -180,6 +182,7 @@ export interface FurnitureModel {
   dealerId: string | null;
   companyId: string;
   name: string;
+  roomType?: string; // 'Yatak Odası' | 'Oturma Odası' | 'Yemek Odası' | 'Çocuk Odası' | 'Ofis'
   isGlobal: boolean;
 }
 

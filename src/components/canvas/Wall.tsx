@@ -32,9 +32,26 @@ export const Wall = memo(function Wall({
   const aCm = points[wall.startPointIndex];
   const bCm = points[wall.endPointIndex];
 
+  if (!aCm || !bCm) return null;
+
   const aPx = { x: cmToPx(aCm.x), y: cmToPx(aCm.y) };
   const bPx = { x: cmToPx(bCm.x), y: cmToPx(bCm.y) };
   const lengthCm = segmentLength(aCm, bCm);
+
+  // Outward normal: perpendicular pointing away from room centroid
+  const centroid = {
+    x: points.reduce((s, p) => s + p.x, 0) / points.length,
+    y: points.reduce((s, p) => s + p.y, 0) / points.length,
+  };
+  const wdxCm = aCm.x - bCm.x, wdyCm = aCm.y - bCm.y; // deliberate: left normal of b→a
+  const wallLenCm = Math.hypot(wdxCm, wdyCm) || 1;
+  const nx = -wdyCm / wallLenCm, ny = wdxCm / wallLenCm; // candidate normal
+  const midCmX = (aCm.x + bCm.x) / 2, midCmY = (aCm.y + bCm.y) / 2;
+  const toCentX = centroid.x - midCmX, toCentY = centroid.y - midCmY;
+  // If normal points toward centroid, flip it
+  const outwardNormal = (nx * toCentX + ny * toCentY) > 0
+    ? { x: -nx, y: -ny }
+    : { x: nx, y: ny };
 
   // Compute gaps in wall line for doors and windows
   // Each gap: [t_start, t_end] as 0-1 normalized along wall
@@ -138,6 +155,7 @@ export const Wall = memo(function Wall({
           lengthCm={lengthCm}
           isLocked={wall.isLengthLocked}
           isPinned={wall.isPinned}
+          outwardNormal={outwardNormal}
           onCommit={onCommitLength}
           onToggleLock={onToggleLock}
           onTogglePin={onTogglePin}

@@ -149,6 +149,8 @@ function getCanvasSvgAndRect() {
 
 export function useDrag() {
   const addFurnitureInstance = usePlanStore((s) => s.addFurnitureInstance);
+  const addFurnitureInstances = usePlanStore((s) => s.addFurnitureInstances);
+  const replaceModelSet = usePlanStore((s) => s.replaceModelSet);
   const updateFurnitureInstance = usePlanStore((s) => s.updateFurnitureInstance);
   const planStore = usePlanStore;
   const setSelectedItemId = useUiStore((s) => s.setSelectedItemId);
@@ -156,10 +158,32 @@ export function useDrag() {
   const dragState = useRef<{
     item: FurnitureCatalogItem;
     instanceId?: string;
-    mode: 'catalog' | 'move';
+    mode: 'catalog' | 'move' | 'model';
+    modelItems?: FurnitureCatalogItem[]; // all products of the dragged model
     dragOffset: { x: number; y: number };
     rotation: number; // current rotation of the dragged furniture (preserved throughout drag)
   } | null>(null);
+
+  const startModelDrag = useCallback((
+    clientX: number,
+    clientY: number,
+    modelItems: FurnitureCatalogItem[],
+  ) => {
+    if (modelItems.length === 0) return;
+    const firstItem = modelItems[0];
+    dragState.current = {
+      item: firstItem,
+      mode: 'model',
+      modelItems,
+      dragOffset: { x: firstItem.widthCm / 2, y: firstItem.depthCm / 2 },
+      rotation: 0,
+    };
+    const { canvas } = planStore.getState();
+    const cvInfo = getCanvasSvgAndRect();
+    if (cvInfo) {
+      updateGhost(clientX, clientY, firstItem, canvas.zoom, 0);
+    }
+  }, [planStore]);
 
   const startDrag = useCallback((e: React.PointerEvent, item: FurnitureCatalogItem) => {
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -291,18 +315,96 @@ export function useDrag() {
             snappedTo: snap.snappedTo,
           });
           setSelectedItemId(id);
-        } else if (dragState.current.instanceId) {
+        } else if (dragState.current.mode === 'move' && dragState.current.instanceId) {
           updateFurnitureInstance(dragState.current.instanceId, {
             position: snap.position,
             rotation: snap.rotation,
             snappedTo: snap.snappedTo,
           });
+        } else if (dragState.current.mode === 'model' && dragState.current.modelItems) {
+          const newProducts = dragState.current.modelItems;
+          const dropCmX = cmX;
+          const dropCmY = cmY;
+
+          // ── Detect if a complete set of any model is already in the scene ──
+          const { furnitureInstances: allInstances } = planStore.getState();
+          const { products: allProducts } = useCatalogStore.getState();
+
+          // Group existing instances by modelId
+          const instancesByModel = new Map<string, FurnitureInstance[]>();
+          for (const fi of allInstances) {
+            const catalogItem = itemMap.get(fi.catalogItemId);
+            if (!catalogItem?.modelId) continue;
+            const mid = catalogItem.modelId;
+            if (!instancesByModel.has(mid)) instancesByModel.set(mid, []);
+            instancesByModel.get(mid)!.push(fi);
+          }
+
+          // Find a model where ALL its products are present as instances
+          let oldModelInstances: FurnitureInstance[] | null = null;
+          for (const [mid, insts] of instancesByModel) {
+            const modelProductIds = new Set(allProducts.filter((p) => p.modelId === mid).map((p) => p.id));
+            const presentProductIds = new Set(insts.map((fi) => fi.catalogItemId));
+            if (modelProductIds.size > 0 && [...modelProductIds].every((pid) => presentProductIds.has(pid))) {
+              oldModelInstances = insts;
+              break; // take the first complete set found
+            }
+          }
+
+          if (oldModelInstances) {
+            // ── Replace mode: match new products to old instances by category ──
+            const removeIds = oldModelInstances.map((fi) => fi.id);
+
+            // Build a map: category → list of old instances (to consume one per new product)
+            const oldByCat = new Map<string, FurnitureInstance[]>();
+            for (const fi of oldModelInstances) {
+              const cat = itemMap.get(fi.catalogItemId)?.category ?? '__none__';
+              if (!oldByCat.has(cat)) oldByCat.set(cat, []);
+              oldByCat.get(cat)!.push(fi);
+            }
+
+            const newInstances: FurnitureInstance[] = newProducts.map((np, idx) => {
+              const cat = np.category ?? '__none__';
+              const pool = oldByCat.get(cat) ?? [];
+              const match = pool.shift(); // consume one old instance of matching category
+
+              if (match) {
+                // Preserve the old instance's position and snappedTo
+                return {
+                  id: crypto.randomUUID(),
+                  catalogItemId: np.id,
+                  position: match.position,
+                  rotation: match.rotation,
+                  snappedTo: match.snappedTo,
+                };
+              } else {
+                // No match — place at drop point with offset
+                return {
+                  id: crypto.randomUUID(),
+                  catalogItemId: np.id,
+                  position: { x: dropCmX + idx * 10, y: dropCmY + idx * 10 },
+                  rotation: 0,
+                };
+              }
+            });
+
+            replaceModelSet(removeIds, newInstances);
+          } else {
+            // ── Add mode: place all products near drop point ──
+            const newInstances: FurnitureInstance[] = newProducts.map((np, idx) => ({
+              id: crypto.randomUUID(),
+              catalogItemId: np.id,
+              position: { x: dropCmX + idx * 10, y: dropCmY + idx * 10 },
+              rotation: 0,
+            }));
+            addFurnitureInstances(newInstances);
+          }
         }
       }
     }
 
     dragState.current = null;
-  }, [planStore, addFurnitureInstance, updateFurnitureInstance, setSelectedItemId]);
+  }, [planStore, addFurnitureInstance, addFurnitureInstances, replaceModelSet, updateFurnitureInstance, setSelectedItemId]);
 
   // Attach global pointer listeners; clean up on unmount
   useEffect(() => {
@@ -323,5 +425,5 @@ export function useDrag() {
     };
   }, [onPointerMove, onPointerUp]);
 
-  return { startDrag, startMoveDrag };
+  return { startDrag, startMoveDrag, startModelDrag };
 }

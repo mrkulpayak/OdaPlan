@@ -18,6 +18,8 @@ interface PlanActions {
   updateWallLength: (wallId: string, newLengthCm: number, canvasWidth: number, canvasHeight: number) => { blocked: boolean; reason?: string };
   toggleWallLock: (wallId: string) => void;
   addFurnitureInstance: (instance: FurnitureInstance) => void;
+  addFurnitureInstances: (instances: FurnitureInstance[]) => void;
+  replaceModelSet: (removeIds: string[], newInstances: FurnitureInstance[]) => void;
   updateFurnitureInstance: (id: string, updates: Partial<FurnitureInstance>) => void;
   removeFurnitureInstance: (id: string) => void;
   rotateFurniture: (id: string) => void;
@@ -366,6 +368,21 @@ export const usePlanStore = create<PlanState & PlanActions>()(
       addFurnitureInstance: (instance) => {
         get().saveSnapshot();
         set((s) => ({ furnitureInstances: [...s.furnitureInstances, instance] }));
+      },
+
+      addFurnitureInstances: (instances) => {
+        get().saveSnapshot();
+        set((s) => ({ furnitureInstances: [...s.furnitureInstances, ...instances] }));
+      },
+
+      replaceModelSet: (removeIds, newInstances) => {
+        get().saveSnapshot();
+        set((s) => ({
+          furnitureInstances: [
+            ...s.furnitureInstances.filter((fi) => !removeIds.includes(fi.id)),
+            ...newInstances,
+          ],
+        }));
       },
 
       updateFurnitureInstance: (id, updates) =>

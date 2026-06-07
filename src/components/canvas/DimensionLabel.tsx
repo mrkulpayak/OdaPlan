@@ -1,7 +1,6 @@
 import { memo, useState, useRef, useEffect } from 'react';
 import { Lock, Unlock, Pin, PinOff } from 'lucide-react';
 import type { Point } from '../../types';
-import { segmentAngleDegrees } from '../../lib/geometry';
 
 interface Props {
   wallId: string;
@@ -10,6 +9,8 @@ interface Props {
   lengthCm: number;
   isLocked: boolean;
   isPinned: boolean;
+  /** Outward unit normal in SVG px space — ensures label is always outside the room */
+  outwardNormal: Point;
   onCommit: (wallId: string, newLengthCm: number) => void;
   onToggleLock: (wallId: string) => void;
   onTogglePin: (wallId: string) => void;
@@ -18,7 +19,7 @@ interface Props {
 }
 
 export const DimensionLabel = memo(function DimensionLabel({
-  wallId, a, b, lengthCm, isLocked, isPinned, onCommit, onToggleLock, onTogglePin, viewRotation, zoom,
+  wallId, a, b, lengthCm, isLocked, isPinned, outwardNormal, onCommit, onToggleLock, onTogglePin, viewRotation, zoom,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [inputVal, setInputVal] = useState('');
@@ -27,13 +28,11 @@ export const DimensionLabel = memo(function DimensionLabel({
   const midX = (a.x + b.x) / 2;
   const midY = (a.y + b.y) / 2;
 
-  const wallAngle = segmentAngleDegrees(a, b);
-  // Perpendicular offset direction (outward)
-  const perpAngle = wallAngle - 90;
-  const perpRad = (perpAngle * Math.PI) / 180;
-  const offset = 18;
-  const labelX = midX + offset * Math.cos(perpRad);
-  const labelY = midY + offset * Math.sin(perpRad);
+  const offset = 60;
+  const nx = outwardNormal?.x ?? 0;
+  const ny = outwardNormal?.y ?? -1;
+  const labelX = midX + offset * nx;
+  const labelY = midY + offset * ny;
 
   // Counter-rotate text to stay screen-readable
   const textRotation = -viewRotation;
@@ -57,7 +56,7 @@ export const DimensionLabel = memo(function DimensionLabel({
     if (editing) inputRef.current?.select();
   }, [editing]);
 
-  const fontSize = Math.max(9, Math.min(12, 11 / zoom));
+  const fontSize = Math.max(18, Math.min(24, 22 / zoom));
 
   return (
     <g data-interactive="true" data-dimension-label="true">
@@ -117,30 +116,30 @@ export const DimensionLabel = memo(function DimensionLabel({
       {/* Length lock icon */}
       <g
         data-interactive="true"
-        transform={`translate(${labelX + 28}, ${labelY - 6}) rotate(${textRotation}, 6, 6)`}
+        transform={`translate(${labelX + 54}, ${labelY - 8}) rotate(${textRotation}, 8, 8)`}
         onClick={() => onToggleLock(wallId)}
         style={{ cursor: 'pointer' }}
       >
-        <rect width={14} height={14} fill="transparent" />
+        <rect width={16} height={16} fill="transparent" />
         {isLocked ? (
-          <Lock size={12} color="var(--color-accent)" style={{ display: 'block' }} />
+          <Lock size={14} color="var(--color-accent)" style={{ display: 'block' }} />
         ) : (
-          <Unlock size={12} color="var(--color-text-muted)" style={{ display: 'block' }} />
+          <Unlock size={14} color="var(--color-text-muted)" style={{ display: 'block' }} />
         )}
       </g>
 
       {/* Pin icon — fully anchors the wall in space */}
       <g
         data-interactive="true"
-        transform={`translate(${labelX + 44}, ${labelY - 6}) rotate(${textRotation}, 6, 6)`}
+        transform={`translate(${labelX + 74}, ${labelY - 8}) rotate(${textRotation}, 8, 8)`}
         onClick={() => onTogglePin(wallId)}
         style={{ cursor: 'pointer' }}
       >
         <rect width={14} height={14} fill="transparent" />
         {isPinned ? (
-          <Pin size={12} color="#ef4444" style={{ display: 'block' }} />
+          <Pin size={14} color="#ef4444" style={{ display: 'block' }} />
         ) : (
-          <PinOff size={12} color="var(--color-text-muted)" style={{ display: 'block' }} />
+          <PinOff size={14} color="var(--color-text-muted)" style={{ display: 'block' }} />
         )}
       </g>
     </g>

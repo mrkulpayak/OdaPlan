@@ -54,6 +54,7 @@ export const useCatalogStore = create<CatalogState & CatalogActions>()((set, _ge
       dealerId: m.dealer_id,
       companyId: m.company_id,
       name: m.name,
+      roomType: m.room_type ?? undefined,
       isGlobal: m.is_global,
     }));
 
@@ -68,6 +69,7 @@ export const useCatalogStore = create<CatalogState & CatalogActions>()((set, _ge
       frontSide: p.front_side,
       widthCm: p.width_cm,
       depthCm: p.depth_cm,
+      colorFamily: p.color_family ?? undefined,
       params: p.params,
       isGlobal: p.is_global,
     }));

@@ -1,10 +1,11 @@
-import { memo, useRef, useEffect } from 'react';
+import { memo, useRef, useEffect, useState, useCallback } from 'react';
 import { cmToPx } from '../../lib/geometry';
 import { useUiStore } from '../../store/uiStore';
 import { usePlanStore } from '../../store/planStore';
 import { useDrag } from '../../hooks/useDrag';
 import { FurnitureShape } from './FurnitureShape';
 import { SelectionHandles } from './SelectionHandles';
+import { RadialRotateMenu } from './RadialRotateMenu';
 import type { FurnitureInstance, FurnitureCatalogItem } from '../../types';
 
 const DRAG_THRESHOLD_PX = 4;
@@ -26,20 +27,52 @@ export const FurnitureItem = memo(function FurnitureItem({ instance, catalogItem
 
   const isSelected = selectedItemId === instance.id;
 
-  // Track pending drag: pointer must move > DRAG_THRESHOLD_PX to start dragging
   const pendingDragRef = useRef<{ x: number; y: number } | null>(null);
+
+  // ── Radial menu state — lifted here so menu renders outside the rotate group ──
+  const [radialActive, setRadialActive] = useState(false);
+  const [radialAngle, setRadialAngle] = useState(instance.rotation);
+  const originalAngleRef = useRef(instance.rotation);
+
+  const handleOpenRadial = useCallback(() => {
+    originalAngleRef.current = instance.rotation;
+    setRadialAngle(instance.rotation);
+    setRadialActive(true);
+  }, [instance.rotation]);
+
+  const handleRadialAngleChange = useCallback((angle: number) => {
+    setRadialAngle(angle);
+    rotateFurnitureToAngle(instance.id, angle);
+  }, [rotateFurnitureToAngle, instance.id]);
+
+  const handleRadialConfirm = useCallback(() => {
+    setRadialActive(false);
+  }, []);
+
+  const handleRadialCancel = useCallback(() => {
+    rotateFurnitureToAngle(instance.id, originalAngleRef.current);
+    setRadialActive(false);
+  }, [rotateFurnitureToAngle, instance.id]);
+
+  // Close radial if item is deselected
+  useEffect(() => {
+    if (!isSelected) setRadialActive(false);
+  }, [isSelected]);
 
   const x = cmToPx(instance.position.x);
   const y = cmToPx(instance.position.y);
   const w = cmToPx(catalogItem.widthCm);
   const d = cmToPx(catalogItem.depthCm);
 
-  // ── Keyboard delete (Backspace / Delete) ────────────────────────
+  // Furniture center in world-px space (no rotation applied — menus live here)
+  const centerX = x + w / 2;
+  const centerY = y + d / 2;
+
+  // ── Keyboard delete ──────────────────────────────────────────────
   useEffect(() => {
     if (!isSelected) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        // Don't fire if user is typing in an input/textarea
         const tag = (e.target as HTMLElement).tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
         removeFurnitureInstance(instance.id);
@@ -79,88 +112,108 @@ export const FurnitureItem = memo(function FurnitureItem({ instance, catalogItem
   };
 
   return (
-    <g
-      transform={`translate(${x}, ${y}) rotate(${instance.rotation}, ${w / 2}, ${d / 2})`}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      style={{ cursor: isSelected ? 'default' : 'pointer' }}
-    >
-      <FurnitureShape
-        shapeType={catalogItem.shapeType}
-        widthCm={catalogItem.widthCm}
-        depthCm={catalogItem.depthCm}
-        params={catalogItem.params}
-        frontSide={catalogItem.frontSide}
-        isSelected={isSelected}
-      />
-
-      {/* Name label when selected */}
-      {isSelected && (
-        <text
-          x={w / 2}
-          y={-16}
-          textAnchor="middle"
-          style={{
-            fontFamily: 'var(--font-body)',
-            fontSize: '11px',
-            fill: 'var(--color-text)',
-            pointerEvents: 'none',
-          }}
-        >
-          {catalogItem.name}
-        </text>
-      )}
-
-      {/* Dimension labels inside furniture bounds when selected */}
-      {isSelected && (
-        <g style={{ pointerEvents: 'none' }}>
-          <text
-            x={w / 2}
-            y={8 / zoom}
-            textAnchor="middle"
-            dominantBaseline="hanging"
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: `${10 / zoom}px`,
-              fill: 'var(--color-primary)',
-              fontWeight: 600,
-            }}
-          >
-            {Math.round(catalogItem.widthCm)} cm
-          </text>
-          <text
-            x={w - 8 / zoom}
-            y={d / 2}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            transform={`rotate(-90, ${w - 8 / zoom}, ${d / 2})`}
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: `${10 / zoom}px`,
-              fill: 'var(--color-primary)',
-              fontWeight: 600,
-            }}
-          >
-            {Math.round(catalogItem.depthCm)} cm
-          </text>
-        </g>
-      )}
-
-      {isSelected && (
-        <SelectionHandles
+    <>
+      {/* ── Furniture body — rotated group ── */}
+      <g
+        transform={`translate(${x}, ${y}) rotate(${instance.rotation}, ${w / 2}, ${d / 2})`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        style={{ cursor: isSelected ? 'default' : 'pointer' }}
+      >
+        <FurnitureShape
+          shapeType={catalogItem.shapeType}
           widthCm={catalogItem.widthCm}
           depthCm={catalogItem.depthCm}
+          params={catalogItem.params}
           frontSide={catalogItem.frontSide}
-          rotation={instance.rotation}
+          isSelected={isSelected}
+        />
+
+        {isSelected && (
+          <text
+            x={w / 2}
+            y={-16}
+            textAnchor="middle"
+            style={{
+              fontFamily: 'var(--font-body)',
+              fontSize: '11px',
+              fill: 'var(--color-text)',
+              pointerEvents: 'none',
+              userSelect: 'none',
+            }}
+          >
+            {catalogItem.name}
+          </text>
+        )}
+
+        {isSelected && (
+          <g style={{ pointerEvents: 'none' }}>
+            <text
+              x={w / 2}
+              y={8 / zoom}
+              textAnchor="middle"
+              dominantBaseline="hanging"
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: `${10 / zoom}px`,
+                fill: 'var(--color-primary)',
+                fontWeight: 600,
+                userSelect: 'none',
+              }}
+            >
+              {Math.round(catalogItem.widthCm)} cm
+            </text>
+            <text
+              x={w - 8 / zoom}
+              y={d / 2}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              transform={`rotate(-90, ${w - 8 / zoom}, ${d / 2})`}
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: `${10 / zoom}px`,
+                fill: 'var(--color-primary)',
+                fontWeight: 600,
+                userSelect: 'none',
+              }}
+            >
+              {Math.round(catalogItem.depthCm)} cm
+            </text>
+          </g>
+        )}
+
+        {isSelected && (
+          <SelectionHandles
+            widthCm={catalogItem.widthCm}
+            depthCm={catalogItem.depthCm}
+            frontSide={catalogItem.frontSide}
+            rotation={instance.rotation}
+            zoom={zoom}
+            radialActive={radialActive}
+            onStartMoveDrag={handleStartMove}
+            onRotate90={() => rotateFurniture(instance.id)}
+            onDelete={() => { removeFurnitureInstance(instance.id); setSelectedItemId(null); }}
+            onDuplicate={() => duplicateFurnitureInstance(instance.id)}
+            onOpenRadial={handleOpenRadial}
+          />
+        )}
+      </g>
+
+      {/* ── Radial menu — rendered OUTSIDE the rotate group, at world-px center ── */}
+      {isSelected && radialActive && (
+        <RadialRotateMenu
+          cx={centerX}
+          cy={centerY}
+          currentAngle={radialAngle}
+          originalAngle={originalAngleRef.current}
+          frontSide={catalogItem.frontSide}
           zoom={zoom}
-          onStartMoveDrag={handleStartMove}
-          onRotate90={() => rotateFurniture(instance.id)}
-          onRotateToAngle={(a) => rotateFurnitureToAngle(instance.id, a)}
-          onDelete={() => { removeFurnitureInstance(instance.id); setSelectedItemId(null); }}
-          onDuplicate={() => duplicateFurnitureInstance(instance.id)}
+          onAngleChange={handleRadialAngleChange}
+          onConfirm={handleRadialConfirm}
+          onCancel={handleRadialCancel}
         />
       )}
-    </g>
+    </>
   );
 });
