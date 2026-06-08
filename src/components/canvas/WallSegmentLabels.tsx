@@ -217,13 +217,18 @@ export function WallSegmentLabels({ wallId, wallStart, wallEnd, zoom }: Props) {
             const newDc = isAlongWall ? col.depthCm : Math.max(5, newVal);
             // Start with the wall-perpendicular adjustment (keeps wall face flush)
             let newPos = adjustColPosForDimChange(col, newWc, newDc);
-            // Additionally fix the along-wall STARTING edge to seg.startCm so the
-            // column grows from its starting edge rather than from its center.
             const newHalfW = isAlongWall ? newWc / 2 : newDc / 2;
             const newCxAfter = newPos.x + newWc / 2;
             const newCyAfter = newPos.y + newDc / 2;
             const newTAlong = (newCxAfter - Ax) * ux + (newCyAfter - Ay) * uy;
-            const desiredTAlong = seg.startCm + newHalfW;
+            // Anchor the corner-touching edge:
+            // If the column's END edge is at the wall endpoint (within 2cm), keep the END fixed.
+            // Otherwise keep the START fixed. This ensures a corner-snapped column grows
+            // away from the corner wall instead of into it.
+            const anchorEnd = seg.endCm > wallLen - 2;
+            const desiredTAlong = anchorEnd
+              ? seg.endCm - newHalfW   // anchor end → grow leftward
+              : seg.startCm + newHalfW; // anchor start → grow rightward
             const deltaAlong = desiredTAlong - newTAlong;
             newPos = { x: newPos.x + deltaAlong * ux, y: newPos.y + deltaAlong * uy };
             updateColumn(seg.id!, {
