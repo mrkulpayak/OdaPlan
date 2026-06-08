@@ -38,20 +38,28 @@ export const Wall = memo(function Wall({
   const bPx = { x: cmToPx(bCm.x), y: cmToPx(bCm.y) };
   const lengthCm = segmentLength(aCm, bCm);
 
-  // Outward normal: perpendicular pointing away from room centroid
-  const centroid = {
-    x: points.reduce((s, p) => s + p.x, 0) / points.length,
-    y: points.reduce((s, p) => s + p.y, 0) / points.length,
-  };
-  const wdxCm = aCm.x - bCm.x, wdyCm = aCm.y - bCm.y; // deliberate: left normal of b→a
+  // Outward normal: use polygon winding order (shoelace signed area) for reliability.
+  // Centroid-of-vertices fails for concave rooms (L-shape etc.) because the average
+  // of corner points can fall outside the actual room area, causing wrong normals.
+  let signedArea = 0;
+  for (let i = 0; i < points.length; i++) {
+    const j = (i + 1) % points.length;
+    signedArea += points[i].x * points[j].y - points[j].x * points[i].y;
+  }
+  // signedArea > 0 → CCW in math (CW on screen with y-down)
+  // For CW-on-screen polygon, interior is to the RIGHT of each A→B edge.
+  // Wall is stored A→B, so outward = LEFT perp of A→B = (-dy, dx)/len.
+  // For CCW-on-screen polygon, flip.
+  const wdxCm = bCm.x - aCm.x, wdyCm = bCm.y - aCm.y; // A→B direction
   const wallLenCm = Math.hypot(wdxCm, wdyCm) || 1;
-  const nx = -wdyCm / wallLenCm, ny = wdxCm / wallLenCm; // candidate normal
-  const midCmX = (aCm.x + bCm.x) / 2, midCmY = (aCm.y + bCm.y) / 2;
-  const toCentX = centroid.x - midCmX, toCentY = centroid.y - midCmY;
-  // If normal points toward centroid, flip it
-  const outwardNormal = (nx * toCentX + ny * toCentY) > 0
-    ? { x: -nx, y: -ny }
-    : { x: nx, y: ny };
+  const ux = wdxCm / wallLenCm, uy = wdyCm / wallLenCm;
+  // Left perp of A→B:
+  const leftNx = -uy, leftNy = ux;
+  // CW on screen (signedArea > 0): interior is to the right → outward is LEFT perp
+  // CCW on screen (signedArea < 0): interior is to the left → outward is RIGHT perp (flip)
+  const outwardNormal = signedArea > 0
+    ? { x: leftNx, y: leftNy }
+    : { x: -leftNx, y: -leftNy };
 
   // Compute gaps in wall line for doors and windows
   // Each gap: [t_start, t_end] as 0-1 normalized along wall
