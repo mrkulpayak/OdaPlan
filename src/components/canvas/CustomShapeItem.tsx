@@ -152,7 +152,11 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
     const snapRoom = state.canvas.snapEnabled !== false ? state.room : null;
     const snap = computeSnap(pos, fakeItem, snapRoom, state.furnitureInstances, itemMap, instance.rotation);
 
-    updateCustomShapeInstance(instance.id, { position: snap.position });
+    updateCustomShapeInstance(instance.id, {
+      position: snap.position,
+      rotation: snap.rotation,
+      snappedTo: snap.snappedTo,
+    });
   }, [instance.id, instance.dims, instance.rotation, updateCustomShapeInstance]);
 
   const handlePointerUp = useCallback(() => {

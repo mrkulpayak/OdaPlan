@@ -146,6 +146,7 @@ export interface CustomShapeInstance {
   /** Top-left of the bounding box in cm */
   position: Point;
   rotation: number; // degrees
+  snappedTo?: { wallId: string; side: FurnitureFrontSide };
   /**
    * rect:      { A: width, B: depth }
    * l-shape:   { A: outerWidth, B: outerDepth, C: notchWidth, D: notchDepth }

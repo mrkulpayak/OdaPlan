@@ -702,9 +702,15 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           return { ...col, position: { x: col.position.x + delta.x, y: col.position.y + delta.y } };
         });
 
+        const updatedCustomShapes = state.customShapeInstances.map((cs) => {
+          if (cs.snappedTo?.wallId !== wallId) return cs;
+          return { ...cs, position: { x: cs.position.x + delta.x, y: cs.position.y + delta.y } };
+        });
+
         set({
           room: { ...state.room, points: newPoints, columns: updatedColumns },
           furnitureInstances: updatedInstances,
+          customShapeInstances: updatedCustomShapes,
         });
       },
 
@@ -1119,9 +1125,56 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           };
         });
 
+        // --- Move wall-snapped custom shapes with the wall ---
+        const updatedCustomShapes = state.customShapeInstances.map((cs) => {
+          if (!cs.snappedTo) return cs;
+          const wall = state.room!.walls.find((w) => w.id === cs.snappedTo!.wallId);
+          if (!wall) return cs;
+          if (wall.startPointIndex !== pointIndex && wall.endPointIndex !== pointIndex) return cs;
+
+          const oldA = state.room!.points[wall.startPointIndex];
+          const oldB = state.room!.points[wall.endPointIndex];
+          const oldLen = Math.hypot(oldB.x - oldA.x, oldB.y - oldA.y);
+          if (oldLen < 1) return cs;
+          const oldUx = (oldB.x - oldA.x) / oldLen;
+          const oldUy = (oldB.y - oldA.y) / oldLen;
+
+          const newA = newPoints[wall.startPointIndex];
+          const newB = newPoints[wall.endPointIndex];
+          const newLen = Math.hypot(newB.x - newA.x, newB.y - newA.y);
+          if (newLen < 1) return cs;
+          const newUx = (newB.x - newA.x) / newLen;
+          const newUy = (newB.y - newA.y) / newLen;
+
+          const oldWallAngle = Math.atan2(oldUy, oldUx) * (180 / Math.PI);
+          const newWallAngle = Math.atan2(newUy, newUx) * (180 / Math.PI);
+          const angleDelta   = newWallAngle - oldWallAngle;
+          const newRotation  = ((cs.rotation + angleDelta) % 360 + 360) % 360;
+
+          // Track bbox center along the wall
+          const fixedIsStart = (pointIndex === wall.endPointIndex);
+          const fixedPt = fixedIsStart ? oldA : oldB;
+          const oldFdx = fixedIsStart ? oldUx : -oldUx;
+          const oldFdy = fixedIsStart ? oldUy : -oldUy;
+          const newFdx = fixedIsStart ? newUx : -newUx;
+          const newFdy = fixedIsStart ? newUy : -newUy;
+
+          // Read bbox dims from dims (approximate — use A/B for rect, fallback)
+          const halfW = (cs.dims['A'] ?? 50) / 2;
+          const halfD = (cs.dims['B'] ?? 50) / 2;
+          const cxOld = cs.position.x + halfW;
+          const cyOld = cs.position.y + halfD;
+          const tAlong = (cxOld - fixedPt.x) * oldFdx + (cyOld - fixedPt.y) * oldFdy;
+          const newCx = fixedPt.x + tAlong * newFdx;
+          const newCy = fixedPt.y + tAlong * newFdy;
+
+          return { ...cs, position: { x: newCx - halfW, y: newCy - halfD }, rotation: newRotation };
+        });
+
         set({
           room: { ...state.room, points: newPoints, columns: updatedColumns },
           furnitureInstances: updatedInstances,
+          customShapeInstances: updatedCustomShapes,
         });
       },
 
