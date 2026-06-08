@@ -221,14 +221,44 @@ export function WallSegmentLabels({ wallId, wallStart, wallEnd, zoom }: Props) {
             const newCxAfter = newPos.x + newWc / 2;
             const newCyAfter = newPos.y + newDc / 2;
             const newTAlong = (newCxAfter - Ax) * ux + (newCyAfter - Ay) * uy;
-            // Anchor the corner-touching edge:
-            // If the column's END edge is at the wall endpoint (within 2cm), keep the END fixed.
-            // Otherwise keep the START fixed. This ensures a corner-snapped column grows
-            // away from the corner wall instead of into it.
-            const anchorEnd = seg.endCm > wallLen - 2;
+
+            // Detect which lateral face of the column is flush against a perpendicular wall.
+            // That face must stay fixed so the column grows away from the corner.
+            // The lateral faces are at t = seg.startCm (left/start face) and t = seg.endCm (right/end face).
+            // Perpendicular wall normal: (-uy, ux)
+            const FLUSH_TOL = 3; // cm
+            const isFaceFlushWithWall = (tAlong: number) => {
+              // World position of the lateral face midpoint
+              const fx = Ax + tAlong * ux;
+              const fy = Ay + tAlong * uy;
+              for (const w of cur.walls) {
+                if (w.id === wallId) continue; // skip the same wall
+                const wA = cur.points[w.startPointIndex];
+                const wB = cur.points[w.endPointIndex];
+                const wLen = Math.hypot(wB.x - wA.x, wB.y - wA.y);
+                if (wLen < 1) continue;
+                const wux = (wB.x - wA.x) / wLen;
+                const wuy = (wB.y - wA.y) / wLen;
+                const dx = fx - wA.x, dy = fy - wA.y;
+                const perp = Math.abs(-dx * wuy + dy * wux);
+                const along = dx * wux + dy * wuy;
+                if (perp < FLUSH_TOL && along >= -FLUSH_TOL && along <= wLen + FLUSH_TOL) return true;
+              }
+              return false;
+            };
+
+            const endFlush   = isFaceFlushWithWall(seg.endCm);
+            const startFlush = isFaceFlushWithWall(seg.startCm);
+            // Prefer anchoring the flush side; if both or neither, fall back to wall-endpoint proximity
+            const anchorEnd = endFlush
+              ? true
+              : startFlush
+                ? false
+                : seg.endCm > wallLen - 2; // fallback: near wall endpoint
+
             const desiredTAlong = anchorEnd
-              ? seg.endCm - newHalfW   // anchor end → grow leftward
-              : seg.startCm + newHalfW; // anchor start → grow rightward
+              ? seg.endCm - newHalfW   // anchor end → grow toward start
+              : seg.startCm + newHalfW; // anchor start → grow toward end
             const deltaAlong = desiredTAlong - newTAlong;
             newPos = { x: newPos.x + deltaAlong * ux, y: newPos.y + deltaAlong * uy };
             updateColumn(seg.id!, {
