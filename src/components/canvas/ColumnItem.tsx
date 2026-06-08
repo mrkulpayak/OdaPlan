@@ -391,7 +391,8 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
   return (
     <g>
       <defs>
-        <pattern id={hatchId} patternUnits="userSpaceOnUse" width={6} height={6}>
+        <pattern id={hatchId} patternUnits="userSpaceOnUse" width={6} height={6}
+          patternTransform={`rotate(${-rotation}, ${cxPx}, ${cyPx})`}>
           <line x1={0} y1={6} x2={6} y2={0} stroke="var(--color-room-outline)" strokeWidth={0.8} strokeOpacity={0.5} />
         </pattern>
       </defs>
