@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { cmToPx, pxToCm } from '../../lib/geometry';
 import { useUiStore } from '../../store/uiStore';
 import { usePlanStore } from '../../store/planStore';
-import { computeSnap } from '../../hooks/useSnap';
+import { computeSnap, customShapesAsFakeInstances } from '../../hooks/useSnap';
 import { useCatalogStore } from '../../store/catalogStore';
 import { SelectionHandles } from './SelectionHandles';
 import { RadialRotateMenu } from './RadialRotateMenu';
@@ -150,7 +150,11 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
     const itemMap = new Map(products.map((p) => [p.id, p]));
     const fakeItem = mockCatalogItem(instance.dims);
     const snapRoom = state.canvas.snapEnabled !== false ? state.room : null;
-    const snap = computeSnap(pos, fakeItem, snapRoom, state.furnitureInstances, itemMap, instance.rotation);
+    // Merge regular furniture + other custom shapes so snap works across both
+    const csSnap = customShapesAsFakeInstances(state.customShapeInstances, instance.id);
+    const allInstances = [...state.furnitureInstances, ...csSnap.instances];
+    const allItemMap = new Map([...itemMap, ...csSnap.itemMap]);
+    const snap = computeSnap(pos, fakeItem, snapRoom, allInstances, allItemMap, instance.rotation);
 
     updateCustomShapeInstance(instance.id, {
       position: snap.position,

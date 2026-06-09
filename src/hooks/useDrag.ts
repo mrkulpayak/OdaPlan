@@ -2,7 +2,7 @@ import { useRef, useCallback, useEffect } from 'react';
 import { usePlanStore } from '../store/planStore';
 import { useUiStore } from '../store/uiStore';
 import { useCatalogStore } from '../store/catalogStore';
-import { computeSnap } from './useSnap';
+import { computeSnap, customShapesAsFakeInstances } from './useSnap';
 import { pxToCm, cmToPx } from '../lib/geometry';
 import type { FurnitureCatalogItem, FurnitureInstance } from '../types';
 
@@ -258,9 +258,14 @@ export function useDrag() {
     const { products } = useCatalogStore.getState();
     const itemMap = new Map(products.map((p) => [p.id, p]));
 
+    // Merge custom shape instances so regular furniture snaps to them too
+    const csSnap = customShapesAsFakeInstances(planStore.getState().customShapeInstances);
+    const allInstances = [...otherInstances, ...csSnap.instances];
+    const allItemMap   = new Map([...itemMap, ...csSnap.itemMap]);
+
     // Pass the current rotation so snap preserves it and measures distances from rotated edges
     const snapRoom = canvas.snapEnabled !== false ? room : null;
-    const snap = computeSnap(pos, item, snapRoom, otherInstances, itemMap, rotation);
+    const snap = computeSnap(pos, item, snapRoom, allInstances, allItemMap, rotation);
     updateSnapGuides(snap.guideLines, canvas.panX, canvas.panY, canvas.zoom);
 
     // Show ghost at the SNAPPED position (visual center), with the rotation applied
@@ -302,8 +307,12 @@ export function useDrag() {
         const { products } = useCatalogStore.getState();
         const itemMap = new Map(products.map((p) => [p.id, p]));
 
+        const csSnap2 = customShapesAsFakeInstances(planStore.getState().customShapeInstances);
+        const allInstances2 = [...otherInstances, ...csSnap2.instances];
+        const allItemMap2   = new Map([...itemMap, ...csSnap2.itemMap]);
+
         const snapRoom = canvas.snapEnabled !== false ? room : null;
-        const snap = computeSnap(pos, item, snapRoom, otherInstances, itemMap, rotation);
+        const snap = computeSnap(pos, item, snapRoom, allInstances2, allItemMap2, rotation);
 
         if (dragState.current.mode === 'catalog') {
           const id = crypto.randomUUID();

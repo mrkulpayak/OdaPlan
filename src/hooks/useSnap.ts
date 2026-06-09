@@ -1,6 +1,37 @@
 import { SNAP_DISTANCE_CM } from '../lib/constants';
 import { distancePointToSegment, closestPointOnSegment } from '../lib/geometry';
-import type { Room, FurnitureInstance, FurnitureCatalogItem, FurnitureFrontSide, Column } from '../types';
+import type { Room, FurnitureInstance, FurnitureCatalogItem, FurnitureFrontSide, Column, CustomShapeInstance } from '../types';
+import { shapeBBox } from '../lib/customShapes';
+
+/**
+ * Convert custom shape instances into fake FurnitureInstance + catalog item entries
+ * so they participate in furniture-to-furniture snap just like regular furniture.
+ * Optionally pass `excludeId` to skip the dragged custom shape itself.
+ */
+export function customShapesAsFakeInstances(
+  customShapes: CustomShapeInstance[],
+  excludeId?: string,
+): { instances: FurnitureInstance[]; itemMap: Map<string, FurnitureCatalogItem> } {
+  const instances: FurnitureInstance[] = [];
+  const itemMap = new Map<string, FurnitureCatalogItem>();
+  for (const cs of customShapes) {
+    if (cs.id === excludeId) continue;
+    const fakeId = `__cs_${cs.id}`;
+    const bbox = shapeBBox(cs.dims);
+    const fakeItem: FurnitureCatalogItem = {
+      id: fakeId, dealerId: null, companyId: '', modelId: null,
+      name: cs.name ?? 'Özel Şekil',
+      category: 'Özel',
+      shapeType: 'rectangle',
+      frontSide: 'bottom',
+      widthCm: bbox.w, depthCm: bbox.h,
+      params: null, isGlobal: false,
+    };
+    instances.push({ id: fakeId, catalogItemId: fakeId, position: cs.position, rotation: cs.rotation });
+    itemMap.set(fakeId, fakeItem);
+  }
+  return { instances, itemMap };
+}
 
 export interface SnapResult {
   position: { x: number; y: number };
