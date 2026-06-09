@@ -342,8 +342,9 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
 
     {/* Radial rotate menu — outside the rotate group so it stays upright */}
     {isSelected && radialActive && (() => {
-      const xPx = cmToPx(x + bbox.w / 2);
-      const yPx = cmToPx(y + bbox.h / 2);
+      // x, y are already in px; add half-bbox in px to get the center
+      const xPx = x + cmToPx(bbox.w / 2);
+      const yPx = y + cmToPx(bbox.h / 2);
       return (
         <RadialRotateMenu
           cx={xPx} cy={yPx}
