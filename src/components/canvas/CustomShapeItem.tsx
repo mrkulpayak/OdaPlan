@@ -96,7 +96,7 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
   const wPx = cmToPx(bbox.w);
   const hPx = cmToPx(bbox.h);
 
-  const ptsCm  = shapePolygonCm(instance.shapeType, instance.dims);
+  const ptsCm  = shapePolygonCm(instance.shapeType, instance.dims, instance.mirrorX);
   const ptsStr = polygonToSVGPoints(ptsCm, cmToPx);
 
   // ── Drag-to-move ──────────────────────────────────────────────
@@ -246,7 +246,7 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
   // ── Dimension editor foreignObject ────────────────────────────
   const editorW = 200;   // px
 
-  const annotations = shapeEdgeAnnotations(instance.shapeType, instance.dims);
+  const annotations = shapeEdgeAnnotations(instance.shapeType, instance.dims, instance.mirrorX);
   const labelOffset = 14; // px offset from edge midpoint
 
   return (
@@ -333,6 +333,8 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
             setRadialAngle(instance.rotation);
             setRadialActive(true);
           }}
+          onFlip={() => updateCustomShapeInstance(instance.id, { mirrorX: !instance.mirrorX })}
+          isMirrored={!!instance.mirrorX}
         />
       )}
 

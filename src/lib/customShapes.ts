@@ -36,6 +36,7 @@ export const SHAPE_NAMES: Record<CustomShapeType, string> = {
 export function shapePolygonCm(
   type: CustomShapeType,
   dims: Record<string, number>,
+  mirrorX = false,
 ): { x: number; y: number }[] {
   const A = dims.A ?? 80;
   const B = dims.B ?? 60;
@@ -76,6 +77,17 @@ export function shapePolygonCm(
   }
 }
 
+/**
+ * Mirror polygon points horizontally around the bounding box center.
+ * x' = A - x  (bounding box width stays the same).
+ */
+export function mirrorPolygonX(
+  pts: { x: number; y: number }[],
+  A: number,
+): { x: number; y: number }[] {
+  return pts.map((p) => ({ x: A - p.x, y: p.y }));
+}
+
 /** Bounding box (cm) — always A × B. */
 export function shapeBBox(dims: Record<string, number>): { w: number; h: number } {
   return { w: dims.A ?? 80, h: dims.B ?? 60 };
@@ -108,47 +120,50 @@ export interface EdgeAnnotation {
 export function shapeEdgeAnnotations(
   type: CustomShapeType,
   dims: Record<string, number>,
+  mirrorX = false,
 ): EdgeAnnotation[] {
   const A = dims.A ?? 80;
   const B = dims.B ?? 60;
 
+  let result: EdgeAnnotation[];
+
   switch (type) {
     case 'rect':
-      return [
-        // top edge — label A
+      result = [
         { label: 'A', mx: A / 2, my: 0,   nx: 0,  ny: -1, value: A, isInput: true, dimKey: 'A' },
-        // right edge — label B
         { label: 'B', mx: A,     my: B/2,  nx: 1,  ny: 0,  value: B, isInput: true, dimKey: 'B' },
       ];
+      break;
 
     case 'l-shape': {
       const C = Math.min(dims.C ?? 80, A - 5);
       const D = Math.min(dims.D ?? 80, B - 5);
-      return [
-        // top full width → A
+      result = [
         { label: 'A', mx: A / 2,          my: 0,           nx: 0,  ny: -1, value: A, isInput: true, dimKey: 'A' },
-        // left full height → B
         { label: 'B', mx: 0,              my: B / 2,       nx: -1, ny: 0,  value: B, isInput: true, dimKey: 'B' },
-        // inner step horizontal → C
         { label: 'C', mx: A - C / 2,      my: B - D,       nx: 0,  ny: -1, value: C, isInput: true, dimKey: 'C' },
-        // inner step vertical → D
         { label: 'D', mx: A - C,          my: B - D / 2,   nx: 1,  ny: 0,  value: D, isInput: true, dimKey: 'D' },
       ];
+      break;
     }
 
     case 'chamfered': {
       const C = Math.min(dims.C ?? 20, A - 5, B - 5);
-      return [
-        // bottom full width → A
-        { label: 'A', mx: A / 2, my: B,       nx: 0,  ny: 1,  value: A, isInput: true, dimKey: 'A' },
-        // left full height → B
-        { label: 'B', mx: 0,     my: B / 2,   nx: -1, ny: 0,  value: B, isInput: true, dimKey: 'B' },
-        // chamfer → C (show on the chamfer edge midpoint)
-        { label: 'C', mx: A - C / 2, my: C / 2, nx: 0.707, ny: -0.707, value: C, isInput: true, dimKey: 'C' },
+      result = [
+        { label: 'A', mx: A / 2,       my: B,       nx: 0,      ny: 1,      value: A, isInput: true, dimKey: 'A' },
+        { label: 'B', mx: 0,           my: B / 2,   nx: -1,     ny: 0,      value: B, isInput: true, dimKey: 'B' },
+        { label: 'C', mx: A - C / 2,   my: C / 2,   nx: 0.707,  ny: -0.707, value: C, isInput: true, dimKey: 'C' },
       ];
+      break;
     }
 
     default:
-      return [];
+      result = [];
   }
+
+  // Mirror annotation positions: mx' = A - mx, nx' = -nx
+  if (mirrorX) {
+    result = result.map((a) => ({ ...a, mx: A - a.mx, nx: -a.nx }));
+  }
+  return result;
 }

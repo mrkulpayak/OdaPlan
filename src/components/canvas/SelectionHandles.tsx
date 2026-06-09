@@ -15,6 +15,10 @@ interface Props {
   onDelete: () => void;
   onDuplicate: () => void;
   onOpenRadial: () => void;
+  /** Optional: show a horizontal flip button (custom shapes only) */
+  onFlip?: () => void;
+  /** Whether the shape is currently mirrored (to show active state) */
+  isMirrored?: boolean;
 }
 
 const HOLD_MS = 350;
@@ -22,6 +26,7 @@ const HOLD_MS = 350;
 export const SelectionHandles = memo(function SelectionHandles({
   widthCm, depthCm, rotation, zoom, radialActive = false,
   onStartMoveDrag, onRotate90, onDelete, onDuplicate, onOpenRadial,
+  onFlip, isMirrored,
 }: Props) {
   const w = cmToPx(widthCm);
   const d = cmToPx(depthCm);
@@ -132,6 +137,29 @@ export const SelectionHandles = memo(function SelectionHandles({
               strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }}>
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </g>
+          </g>
+        )}
+
+        {/* ── Flip button (below center) — only when onFlip is provided ── */}
+        {!radialActive && onFlip && (
+          <g
+            transform={`translate(${cx}, ${cy + BTN_GAP})`}
+            style={{ cursor: 'pointer' }}
+            onPointerDown={(e) => { e.stopPropagation(); onFlip(); }}
+            role="button"
+            aria-label="Yatay Aynala"
+          >
+            <circle r={BTN_R}
+              fill={isMirrored ? 'var(--color-accent)' : 'rgba(255,255,255,0.88)'}
+              stroke="rgba(0,0,0,0.18)" strokeWidth={BTN_R * 0.06} />
+            {/* Flip horizontal icon: two arrows pointing outward + vertical line */}
+            <g transform={`scale(${BTN_R * 1.1 / 24}) translate(-12,-12)`}
+              fill="none" stroke={isMirrored ? '#fff' : 'rgba(0,0,0,0.65)'} strokeWidth={2.2}
+              strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }}>
+              <path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3" />
+              <path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3" />
+              <line x1="12" y1="3" x2="12" y2="21" />
             </g>
           </g>
         )}

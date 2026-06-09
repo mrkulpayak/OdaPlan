@@ -154,6 +154,8 @@ export interface CustomShapeInstance {
    */
   dims: Record<string, number>;
   name?: string; // optional user label (for future save)
+  /** Horizontal mirror — flips shape around its local vertical axis */
+  mirrorX?: boolean;
 }
 // ── /Custom Shapes ─────────────────────────────────────────────────────────
 
