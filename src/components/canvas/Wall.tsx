@@ -53,13 +53,16 @@ export const Wall = memo(function Wall({
   const wdxCm = bCm.x - aCm.x, wdyCm = bCm.y - aCm.y; // A→B direction
   const wallLenCm = Math.hypot(wdxCm, wdyCm) || 1;
   const ux = wdxCm / wallLenCm, uy = wdyCm / wallLenCm;
-  // Left perp of A→B:
-  const leftNx = -uy, leftNy = ux;
-  // CW on screen (signedArea > 0): interior is to the right → outward is LEFT perp
-  // CCW on screen (signedArea < 0): interior is to the left → outward is RIGHT perp (flip)
+  // Right perp of A→B (rotate 90° CW): (uy, -ux)
+  // In SVG (y-down): CW polygon has signedArea > 0; interior is to the RIGHT of each A→B edge,
+  // so exterior (outward) is to the LEFT = (-uy, ux). But RIGHT perp = (uy,-ux) in SVG y-down
+  // actually points OUTSIDE for CW. Verify: top wall (1,0) → right perp (0,-1) = up = outside ✓
+  const rightNx = uy, rightNy = -ux;
+  // CW on screen (signedArea > 0) → right perp is outward
+  // CCW on screen (signedArea < 0) → left perp is outward (negate right perp)
   const outwardNormal = signedArea > 0
-    ? { x: leftNx, y: leftNy }
-    : { x: -leftNx, y: -leftNy };
+    ? { x: rightNx, y: rightNy }
+    : { x: -rightNx, y: -rightNy };
 
   // Compute gaps in wall line for doors and windows
   // Each gap: [t_start, t_end] as 0-1 normalized along wall
