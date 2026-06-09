@@ -41,17 +41,20 @@ export function shapePolygonCm(
   const A = dims.A ?? 80;
   const B = dims.B ?? 60;
 
+  let pts: { x: number; y: number }[];
+
   switch (type) {
     case 'rect':
-      return [
+      pts = [
         { x: 0, y: 0 }, { x: A, y: 0 },
         { x: A, y: B }, { x: 0, y: B },
       ];
+      break;
 
     case 'l-shape': {
       const C = Math.min(dims.C ?? 80, A - 5);
       const D = Math.min(dims.D ?? 80, B - 5);
-      return [
+      pts = [
         { x: 0,     y: 0     },
         { x: A,     y: 0     },
         { x: A,     y: B - D },
@@ -59,22 +62,27 @@ export function shapePolygonCm(
         { x: A - C, y: B     },
         { x: 0,     y: B     },
       ];
+      break;
     }
 
     case 'chamfered': {
       const C = Math.min(dims.C ?? 20, A - 5, B - 5);
-      return [
+      pts = [
         { x: 0,     y: 0 },
         { x: A - C, y: 0 },
         { x: A,     y: C },
         { x: A,     y: B },
         { x: 0,     y: B },
       ];
+      break;
     }
 
     default:
-      return [];
+      pts = [];
   }
+
+  // Apply horizontal mirror: x' = A - x
+  return mirrorX ? pts.map((p) => ({ x: A - p.x, y: p.y })) : pts;
 }
 
 /**

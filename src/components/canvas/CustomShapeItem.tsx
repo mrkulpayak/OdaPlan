@@ -203,6 +203,32 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
     }
   }, [instance.position]);
 
+  // ── Radial menu handlers (memoized — stable refs prevent useEffect re-runs) ──
+  const handleOpenRadial = useCallback(() => {
+    originalAngleRef.current = instance.rotation;
+    setRadialAngle(instance.rotation);
+    setRadialActive(true);
+  }, [instance.rotation]);
+
+  const handleRadialAngleChange = useCallback((ang: number) => {
+    setRadialAngle(ang);
+    updateCustomShapeInstance(instance.id, { rotation: ang });
+  }, [instance.id, updateCustomShapeInstance]);
+
+  const handleRadialConfirm = useCallback(() => {
+    setRadialActive(false);
+  }, []);
+
+  const handleRadialCancel = useCallback(() => {
+    updateCustomShapeInstance(instance.id, { rotation: originalAngleRef.current });
+    setRadialActive(false);
+  }, [instance.id, updateCustomShapeInstance]);
+
+  const handleRotate90   = useCallback(() => rotateCustomShape(instance.id), [instance.id, rotateCustomShape]);
+  const handleDelete     = useCallback(() => { removeCustomShapeInstance(instance.id); setSelectedItemId(null); }, [instance.id, removeCustomShapeInstance, setSelectedItemId]);
+  const handleDuplicate  = useCallback(() => duplicateCustomShapeInstance(instance.id), [instance.id, duplicateCustomShapeInstance]);
+  const handleFlip       = useCallback(() => updateCustomShapeInstance(instance.id, { mirrorX: !instance.mirrorX }), [instance.id, instance.mirrorX, updateCustomShapeInstance]);
+
   // ── Dimension editor commit ───────────────────────────────────
   const commitEdit = useCallback(() => {
     updateCustomShapeInstance(instance.id, { dims: editDims });
@@ -325,15 +351,11 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
           zoom={zoom}
           radialActive={radialActive}
           onStartMoveDrag={handleStartMove}
-          onRotate90={() => rotateCustomShape(instance.id)}
-          onDelete={() => { removeCustomShapeInstance(instance.id); setSelectedItemId(null); }}
-          onDuplicate={() => duplicateCustomShapeInstance(instance.id)}
-          onOpenRadial={() => {
-            originalAngleRef.current = instance.rotation;
-            setRadialAngle(instance.rotation);
-            setRadialActive(true);
-          }}
-          onFlip={() => updateCustomShapeInstance(instance.id, { mirrorX: !instance.mirrorX })}
+          onRotate90={handleRotate90}
+          onDelete={handleDelete}
+          onDuplicate={handleDuplicate}
+          onOpenRadial={handleOpenRadial}
+          onFlip={handleFlip}
           isMirrored={!!instance.mirrorX}
         />
       )}
@@ -341,28 +363,18 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
     </g>
 
     {/* Radial rotate menu — outside the rotate group so it stays upright */}
-    {isSelected && radialActive && (() => {
-      // x, y are already in px; add half-bbox in px to get the center
-      const xPx = x + cmToPx(bbox.w / 2);
-      const yPx = y + cmToPx(bbox.h / 2);
-      return (
-        <RadialRotateMenu
-          cx={xPx} cy={yPx}
-          currentAngle={radialAngle}
-          originalAngle={originalAngleRef.current}
-          zoom={zoom}
-          onAngleChange={(ang) => {
-            setRadialAngle(ang);
-            updateCustomShapeInstance(instance.id, { rotation: ang });
-          }}
-          onConfirm={() => setRadialActive(false)}
-          onCancel={() => {
-            updateCustomShapeInstance(instance.id, { rotation: originalAngleRef.current });
-            setRadialActive(false);
-          }}
-        />
-      );
-    })()}
+    {isSelected && radialActive && (
+      <RadialRotateMenu
+        cx={x + cmToPx(bbox.w / 2)}
+        cy={y + cmToPx(bbox.h / 2)}
+        currentAngle={radialAngle}
+        originalAngle={originalAngleRef.current}
+        zoom={zoom}
+        onAngleChange={handleRadialAngleChange}
+        onConfirm={handleRadialConfirm}
+        onCancel={handleRadialCancel}
+      />
+    )}
 
     {/* ── Dimension editor — portal to body, fixed position ─────── */}
     {isEditing && panelPos && createPortal(
