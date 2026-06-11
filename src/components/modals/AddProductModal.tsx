@@ -21,7 +21,7 @@ interface Props {
 }
 
 const SHAPE_TYPES: FurnitureShapeType[] = [
-  'rectangle', 'square', 'circle', 'semicircle', 'quarterCircle', 'chamferedRectangle', 'cornerCabinet',
+  'rectangle', 'square', 'circle', 'semicircle', 'quarterCircle', 'chamferedRectangle', 'cornerCabinet', 'sofa', 'lSofa', 'cabinet', 'drawerUnit',
 ];
 
 const SHAPE_LABELS: Record<FurnitureShapeType, string> = {
@@ -32,6 +32,10 @@ const SHAPE_LABELS: Record<FurnitureShapeType, string> = {
   quarterCircle: '¼ Daire',
   chamferedRectangle: 'Pahlı',
   cornerCabinet: 'Köşe',
+  sofa: 'Koltuk',
+  lSofa: 'L Koltuk',
+  cabinet: 'Kapaklı Dolap',
+  drawerUnit: 'Çekmeceli',
 };
 
 const CATEGORIES: FurnitureCategory[] = [
@@ -65,6 +69,9 @@ export function AddProductModal({ dealerId, onClose, prefill }: Props) {
   const [chamferCm, setChamferCm] = useState(prefill?.chamferCm ? String(prefill.chamferCm) : '20');
   const [chamferCorner, setChamferCorner] = useState('topLeft');
   const [quarterCorner, setQuarterCorner] = useState('topLeft');
+  const [bodyDepthCm, setBodyDepthCm] = useState('95');
+  const [chaiseSide, setChaiseSide] = useState<'left' | 'right'>('left');
+  const [seatCount, setSeatCount] = useState('3');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
@@ -80,6 +87,9 @@ export function AddProductModal({ dealerId, onClose, prefill }: Props) {
     if (!category) e.category = 'Kategori zorunludur.';
     if (!widthCm || Number(widthCm) <= 0) e.width = 'Geçerli bir genişlik giriniz.';
     if (!depthCm || Number(depthCm) <= 0) e.depth = 'Geçerli bir derinlik giriniz.';
+    if (shapeType === 'lSofa' && Number(bodyDepthCm) >= Number(depthCm)) {
+      e.bodyDepth = 'Gövde derinliği toplam derinlikten küçük olmalıdır.';
+    }
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -127,6 +137,8 @@ export function AddProductModal({ dealerId, onClose, prefill }: Props) {
     let params: Record<string, unknown> | null = null;
     if (shapeType === 'chamferedRectangle') params = { chamferCm: Number(chamferCm), corner: chamferCorner };
     if (shapeType === 'quarterCircle') params = { corner: quarterCorner };
+    if (shapeType === 'lSofa') params = { bodyDepthCm: Number(bodyDepthCm), chaiseSide };
+    if (shapeType === 'sofa') params = { seatCount: Number(seatCount) };
 
     const { data, error } = await supabase
       .from('furniture_products')
@@ -385,6 +397,32 @@ export function AddProductModal({ dealerId, onClose, prefill }: Props) {
               </select>
             </div>
           )}
+          {shapeType === 'sofa' && (
+            <div className="mt-2">
+              <label className={labelCls} style={fieldStyle}>Oturma sayısı</label>
+              <select className={inputCls} style={fieldStyle} value={seatCount} onChange={(e) => setSeatCount(e.target.value)}>
+                <option value="1">Tekli</option>
+                <option value="2">İkili</option>
+                <option value="3">Üçlü</option>
+              </select>
+            </div>
+          )}
+          {shapeType === 'lSofa' && (
+            <div className="flex gap-3 mt-2">
+              <div className="flex-1">
+                <label className={labelCls} style={fieldStyle}>Gövde derinliği (cm)</label>
+                <input type="number" min={1} className={inputCls} style={{ ...fieldStyle, fontFamily: 'var(--font-mono)' }} value={bodyDepthCm} onChange={(e) => setBodyDepthCm(e.target.value)} />
+                {err('bodyDepth')}
+              </div>
+              <div className="flex-1">
+                <label className={labelCls} style={fieldStyle}>Şezlong yönü</label>
+                <select className={inputCls} style={fieldStyle} value={chaiseSide} onChange={(e) => setChaiseSide(e.target.value as 'left' | 'right')}>
+                  <option value="left">Sol</option>
+                  <option value="right">Sağ</option>
+                </select>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Preview + front side */}
@@ -402,7 +440,9 @@ export function AddProductModal({ dealerId, onClose, prefill }: Props) {
                       depthCm={Math.min(Number(depthCm), 200)}
                       params={
                         shapeType === 'chamferedRectangle' ? { chamferCm: Number(chamferCm), corner: chamferCorner } :
-                        shapeType === 'quarterCircle' ? { corner: quarterCorner } : null
+                        shapeType === 'quarterCircle' ? { corner: quarterCorner } :
+                        shapeType === 'lSofa' ? { bodyDepthCm: Number(bodyDepthCm), chaiseSide } :
+                        shapeType === 'sofa' ? { seatCount: Number(seatCount) } : null
                       }
                       frontSide={frontSide}
                     />

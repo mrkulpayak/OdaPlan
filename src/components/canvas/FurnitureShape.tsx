@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { cmToPx } from '../../lib/geometry';
+import { computeParametricShape } from '../../lib/parametricShapes';
 import type { FurnitureShapeType, FurnitureFrontSide } from '../../types';
 
 interface Props {
@@ -93,6 +94,34 @@ export const FurnitureShape = memo(function FurnitureShape({ shapeType, widthCm,
         <FrontIndicator widthPx={w} depthPx={d} frontSide={frontSide} />
         {isSelected && (
           <rect x={-2} y={-2} width={w + 4} height={d + 4} fill="none" stroke={selectionStroke} strokeWidth={1.5} strokeDasharray="4 3" rx={2} />
+        )}
+      </>
+    );
+  } else if (shapeType === 'lSofa' || shapeType === 'sofa' || shapeType === 'cabinet' || shapeType === 'drawerUnit') {
+    // Outline polygon is the snap/selection boundary only — never rendered
+    const parametric = computeParametricShape(shapeType, widthCm, depthCm, params);
+    const outlinePath = parametric
+      ? parametric.outline
+          .map((p, i) => `${i === 0 ? 'M' : 'L'} ${cmToPx(p.x)} ${cmToPx(p.y)}`)
+          .join(' ') + ' Z'
+      : '';
+    shape = (
+      <>
+        {parametric?.pieces.map((p, i) => (
+          <rect
+            key={i}
+            x={cmToPx(p.x)}
+            y={cmToPx(p.y)}
+            width={cmToPx(p.w)}
+            height={cmToPx(p.h)}
+            fill={FILL}
+            stroke={STROKE}
+            strokeWidth={1}
+            rx={3}
+          />
+        ))}
+        {isSelected && (
+          <path d={outlinePath} fill="none" stroke={selectionStroke} strokeWidth={1.5} strokeDasharray="4 3" />
         )}
       </>
     );

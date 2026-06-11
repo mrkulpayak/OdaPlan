@@ -73,7 +73,11 @@ export type FurnitureShapeType =
   | 'semicircle'
   | 'quarterCircle'
   | 'chamferedRectangle'
-  | 'cornerCabinet';
+  | 'cornerCabinet'
+  | 'lSofa'
+  | 'sofa'
+  | 'cabinet'
+  | 'drawerUnit';
 
 export type FurnitureFrontSide = 'top' | 'right' | 'bottom' | 'left';
 
