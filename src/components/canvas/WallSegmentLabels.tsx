@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { cmToPx } from '../../lib/geometry';
 import { usePlanStore } from '../../store/planStore';
 import { adjustColPosForCorner } from './ColumnItem';
-import type { Column, Point } from '../../types';
+import type { Point } from '../../types';
 
 // ── Editable label (shared) ───────────────────────────────────────────────────
 interface EditableLblProps {
