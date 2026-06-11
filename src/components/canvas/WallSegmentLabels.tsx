@@ -1,30 +1,8 @@
 import { useState } from 'react';
 import { cmToPx } from '../../lib/geometry';
 import { usePlanStore } from '../../store/planStore';
+import { adjustColPosForCorner } from './ColumnItem';
 import type { Column, Point } from '../../types';
-
-// ── Recompute top-left position so snapped face stays on wall after resize ────
-function adjustColPosForDimChange(col: Column, newWc: number, newDc: number): Point {
-  if (!col.snappedToWall) return col.position;
-  const { side } = col.snappedToWall;
-  const θ = (col.rotation * Math.PI) / 180;
-  const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
-  const cx = col.position.x + col.widthCm / 2;
-  const cy = col.position.y + col.depthCm / 2;
-  const [flx, fly] = side === 'top' ? [0, -col.depthCm / 2]
-    : side === 'bottom' ? [0, col.depthCm / 2]
-    : side === 'left' ? [-col.widthCm / 2, 0]
-    : [col.widthCm / 2, 0];
-  const faceMidX = cx + flx * cosθ - fly * sinθ;
-  const faceMidY = cy + flx * sinθ + fly * cosθ;
-  const [nflx, nfly] = side === 'top' ? [0, -newDc / 2]
-    : side === 'bottom' ? [0, newDc / 2]
-    : side === 'left' ? [-newWc / 2, 0]
-    : [newWc / 2, 0];
-  const newCx = faceMidX - (nflx * cosθ - nfly * sinθ);
-  const newCy = faceMidY - (nflx * sinθ + nfly * cosθ);
-  return { x: newCx - newWc / 2, y: newCy - newDc / 2 };
-}
 
 // ── Editable label (shared) ───────────────────────────────────────────────────
 interface EditableLblProps {
@@ -216,7 +194,7 @@ export function WallSegmentLabels({ wallId, wallStart, wallEnd, zoom }: Props) {
             const newWc = isAlongWall ? Math.max(5, newVal) : col.widthCm;
             const newDc = isAlongWall ? col.depthCm : Math.max(5, newVal);
             // Start with the wall-perpendicular adjustment (keeps wall face flush)
-            let newPos = adjustColPosForDimChange(col, newWc, newDc);
+            let newPos = adjustColPosForCorner(col, newWc, newDc, cur);
             const newHalfW = isAlongWall ? newWc / 2 : newDc / 2;
             const newCxAfter = newPos.x + newWc / 2;
             const newCyAfter = newPos.y + newDc / 2;

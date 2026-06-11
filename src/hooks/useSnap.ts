@@ -44,6 +44,12 @@ export interface SnapResult {
  * Compute side midpoints of a furniture rectangle at the given rotation.
  * SVG rotation rotates around the visual center (pos.x + w/2, pos.y + d/2).
  */
+export function rotatedSideMidpointsExport(
+  pos: { x: number; y: number }, w: number, d: number, rotDeg: number
+): Record<FurnitureFrontSide, { x: number; y: number }> {
+  return rotatedSideMidpoints(pos, w, d, rotDeg);
+}
+
 function rotatedSideMidpoints(
   pos: { x: number; y: number },
   w: number,
@@ -173,6 +179,101 @@ function rotatedAABB(
 }
 
 /**
+ * Ray-casting point-in-polygon test.
+ * Returns true if `pt` is inside the polygon defined by `pts`.
+ */
+function pointInPolygon(pt: { x: number; y: number }, pts: { x: number; y: number }[]): boolean {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i].x, yi = pts[i].y;
+    const xj = pts[j].x, yj = pts[j].y;
+    if ((yi > pt.y) !== (yj > pt.y) && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/**
+ * Push furniture off a wall it is straddling.
+ *
+ * Furniture that is FULLY inside or FULLY outside the room is left untouched.
+ * Only when a piece crosses a wall (some corners inside, some outside) is it
+ * pushed to whichever side its CENTER is on, so it clears the wall entirely.
+ *
+ * This lets furniture be placed freely inside OR outside the room, but prevents
+ * it from sitting half-on / half-off a wall.
+ */
+export function pushOffWalls(
+  pos: { x: number; y: number },
+  w: number,
+  d: number,
+  rotDeg: number,
+  room: Room,
+): { x: number; y: number } {
+  const pts = room.points;
+
+  // Shoelace signed area — CW on screen → positive
+  let signedArea = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    signedArea += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+  }
+
+  let cur = pos;
+  for (let iter = 0; iter < 4; iter++) {
+    let moved = false;
+    const corners = rotatedCorners(cur, w, d, rotDeg);
+    const centerX = cur.x + w / 2;
+    const centerY = cur.y + d / 2;
+
+    for (const wall of room.walls) {
+      const a = pts[wall.startPointIndex];
+      const b = pts[wall.endPointIndex];
+      const wdx = b.x - a.x, wdy = b.y - a.y;
+      const len = Math.hypot(wdx, wdy);
+      if (len < 1) continue;
+
+      const ux = wdx / len, uy = wdy / len;
+      // Outward normal (away from room interior)
+      const outNx = signedArea > 0 ? uy : -uy;
+      const outNy = signedArea > 0 ? -ux : ux;
+
+      // Signed distances + along-wall projections for all corners
+      let maxDist = -Infinity, minDist = Infinity;
+      let maxAlong = -Infinity, minAlong = Infinity;
+      for (const c of corners) {
+        const d2 = (c.x - a.x) * outNx + (c.y - a.y) * outNy;
+        if (d2 > maxDist) maxDist = d2;
+        if (d2 < minDist) minDist = d2;
+        const t = (c.x - a.x) * ux + (c.y - a.y) * uy;
+        if (t > maxAlong) maxAlong = t;
+        if (t < minAlong) minAlong = t;
+      }
+
+      // Skip if the furniture doesn't overlap this wall segment along its axis
+      // (avoids false positives on the invisible extensions beyond endpoints)
+      if (maxAlong < -0.5 || minAlong > len + 0.5) continue;
+
+      // Only act when straddling (corners on both sides of the wall line)
+      if (maxDist > 0.5 && minDist < -0.5) {
+        const centerDist = (centerX - a.x) * outNx + (centerY - a.y) * outNy;
+        if (centerDist <= 0) {
+          // Center is inside → push piece fully inside (inward by maxDist)
+          cur = { x: cur.x - maxDist * outNx, y: cur.y - maxDist * outNy };
+        } else {
+          // Center is outside → push piece fully outside (outward by -minDist)
+          cur = { x: cur.x + (-minDist) * outNx, y: cur.y + (-minDist) * outNy };
+        }
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  return cur;
+}
+
+/**
  * Main snap computation.
  *
  * Priority 1 — corner snap         : rotated furniture corner → room corner
@@ -191,7 +292,13 @@ export function computeSnap(
   room: Room | null,
   otherInstances: FurnitureInstance[],
   otherItems: Map<string, FurnitureCatalogItem>,
-  currentRotation = 0
+  currentRotation = 0,
+  /**
+   * If the piece was already snapped to a specific side, lock that side.
+   * Only release the lock when the piece moves > 2× SNAP_DISTANCE from all walls.
+   * This prevents oscillation when multiple sides are equidistant from a wall.
+   */
+  lockedSide?: FurnitureFrontSide,
 ): SnapResult {
   if (!room) return { position: pos, rotation: currentRotation, guideLines: [] };
 
@@ -201,7 +308,23 @@ export function computeSnap(
   let bestDist = SNAP_DISTANCE_CM + 1;
   let bestResult: SnapResult | null = null;
 
+  // ── Outside-room guard ───────────────────────────────────────────────────
+  // When the furniture centre is outside the room, disable ALL snap (corner
+  // and wall) so outside-placed items never magnetise to room geometry.
+  // pushOffWalls still prevents the item from straddling a wall.
+  const centerX = pos.x + w / 2;
+  const centerY = pos.y + d / 2;
+  const centerInsideRoom = pointInPolygon({ x: centerX, y: centerY }, room.points);
+  if (!centerInsideRoom) {
+    return {
+      position: pushOffWalls(pos, w, d, currentRotation, room),
+      rotation: currentRotation,
+      guideLines: [],
+    };
+  }
+
   // ── Priority 1: corner snap (translate only) ─────────────────────────────
+  // Only reached when the centre is inside the room.
   const furCorners = rotatedCorners(pos, w, d, currentRotation);
   for (const roomCorner of room.points) {
     for (const fc of furCorners) {
@@ -222,6 +345,7 @@ export function computeSnap(
   if (bestResult && bestDist <= SNAP_DISTANCE_CM) return bestResult;
 
   // ── Priority 2: wall/column snap (translate + rotate flush) ──────────────
+
   const mids = rotatedSideMidpoints(pos, w, d, currentRotation);
   const sideEntries = Object.entries(mids) as Array<[FurnitureFrontSide, { x: number; y: number }]>;
 
@@ -242,6 +366,11 @@ export function computeSnap(
   // Along-wall unit vector of the best wall segment (used for constrained furniture snap)
   let wallUx = 1, wallUy = 0;
 
+  // Direction vectors of the furniture's two side pairs at the current rotation.
+  // top/bottom sides run along the furniture width axis; left/right along the depth axis.
+  const θrad = (currentRotation * Math.PI) / 180;
+  const cosθ = Math.cos(θrad), sinθ = Math.sin(θrad);
+
   for (const seg of snapSegs) {
     const { a, b } = seg;
     const segLen = Math.hypot(b.x - a.x, b.y - a.y);
@@ -254,7 +383,31 @@ export function computeSnap(
 
     const reqRot = flushRotations(nx, ny);
 
+    // Parallelism of each side pair to this wall segment.
+    // A side is parallel to the wall when its face direction aligns with the wall direction.
+    // top/bottom face direction = ( cosθ,  sinθ)
+    // left/right face direction = (-sinθ,  cosθ)
+    const parTB = Math.abs( cosθ * ux + sinθ * uy); // top & bottom
+    const parLR = Math.abs(-sinθ * ux + cosθ * uy); // left & right
+    const maxPar = Math.max(parTB, parLR);
+    // Threshold: only allow sides within 0.05 of the most-parallel score.
+    // At exactly 45° both pairs are equal (0.707) and both are allowed.
+    const PAR_TOL = 0.05;
+
     for (const [side, midpoint] of sideEntries) {
+      // Snap hysteresis: if a side is already locked (shape was snapped), only
+      // consider that side. This prevents oscillation when multiple sides are
+      // equidistant from a wall (e.g. custom shapes at arbitrary angles).
+      // The lock releases automatically when the locked side drifts outside
+      // SNAP_DISTANCE_CM — wallBestResult stays null → snappedTo gets cleared.
+      if (lockedSide && side !== lockedSide) continue;
+
+      // Only snap via the most-parallel side(s) for this wall.
+      // This prevents, e.g., the left/right sides of a 0°-furniture from
+      // snapping to a vertical wall via the top/bottom faces.
+      const par = (side === 'top' || side === 'bottom') ? parTB : parLR;
+      if (par < maxPar - PAR_TOL) continue;
+
       const dist = distancePointToSegment(midpoint, a, b);
       if (dist >= wallBestDist || dist > SNAP_DISTANCE_CM) continue;
 
@@ -303,16 +456,20 @@ export function computeSnap(
     );
 
     if (snapResult !== null) {
+      const rawPos = {
+        x: snappedPos.x + snapResult * wallUx,
+        y: snappedPos.y + snapResult * wallUy,
+      };
       return {
         ...wallBestResult!,
-        position: {
-          x: snappedPos.x + snapResult * wallUx,
-          y: snappedPos.y + snapResult * wallUy,
-        },
+        position: pushOffWalls(rawPos, w, d, wallBestResult!.rotation, room),
       };
     }
 
-    return wallBestResult!;
+    return {
+      ...wallBestResult!,
+      position: pushOffWalls(wallBestResult!.position, w, d, wallBestResult!.rotation, room),
+    };
   }
 
   // No wall snap: free axis-aligned furniture snap using AABBs.
@@ -363,11 +520,19 @@ export function computeSnap(
   }
 
   if (furnBestPos && furnBestDist <= FURN_SNAP) {
-    return { position: furnBestPos, rotation: currentRotation, guideLines: [] };
+    return {
+      position: pushOffWalls(furnBestPos, w, d, currentRotation, room),
+      rotation: currentRotation,
+      guideLines: [],
+    };
   }
 
-  // No snap — preserve current position and rotation
-  return { position: pos, rotation: currentRotation, guideLines: [] };
+  // No snap — clamp to room boundary and preserve rotation
+  return {
+    position: pushOffWalls(pos, w, d, currentRotation, room),
+    rotation: currentRotation,
+    guideLines: [],
+  };
 }
 
 /**

@@ -4,37 +4,15 @@ import { useUiStore } from '../../store/uiStore';
 import { distancePointToSegment, segmentLength, pxToCm } from '../../lib/geometry';
 import { DEFAULT_DOOR_WIDTH_CM, DEFAULT_WINDOW_WIDTH_CM } from '../../lib/constants';
 import type { Door, Window, Column } from '../../types';
+import { adjustColPosForCorner } from '../canvas/ColumnItem';
+import { LiveDimInput } from '../ui/LiveDimInput';
 
-// Recompute top-left position so snapped face stays on wall after dimension change.
-// The snapped face (perpendicular to wall) stays flush; the along-wall start edge stays fixed.
+// Recompute top-left position so all flush wall faces stay anchored after a
+// dimension change — the non-flush sides absorb the growth/shrink.
 function adjustColPos(col: Column, newWc: number, newDc: number) {
-  if (!col.snappedToWall) return col.position;
-  const { side } = col.snappedToWall;
-  const θ = (col.rotation * Math.PI) / 180;
-  const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
-  const cx = col.position.x + col.widthCm / 2;
-  const cy = col.position.y + col.depthCm / 2;
-  const [flx, fly] = side === 'top' ? [0, -col.depthCm / 2]
-    : side === 'bottom' ? [0, col.depthCm / 2]
-    : side === 'left' ? [-col.widthCm / 2, 0]
-    : [col.widthCm / 2, 0];
-  const fmx = cx + flx * cosθ - fly * sinθ;
-  const fmy = cy + flx * sinθ + fly * cosθ;
-  const [nflx, nfly] = side === 'top' ? [0, -newDc / 2]
-    : side === 'bottom' ? [0, newDc / 2]
-    : side === 'left' ? [-newWc / 2, 0]
-    : [newWc / 2, 0];
-  const newCx = fmx - (nflx * cosθ - nfly * sinθ);
-  const newCy = fmy - (nflx * sinθ + nfly * cosθ);
-  const p = { x: newCx - newWc / 2, y: newCy - newDc / 2 };
-  // Keep along-wall start edge fixed (don't let it drift symmetrically).
-  // For top/bottom snap the along-wall axis is X; for left/right it is Y.
-  if (side === 'top' || side === 'bottom') {
-    p.x = col.position.x;
-  } else {
-    p.y = col.position.y;
-  }
-  return p;
+  const room = usePlanStore.getState().room;
+  if (!room) return col.position;
+  return adjustColPosForCorner(col, newWc, newDc, room);
 }
 
 function findNearestWall(cmX: number, cmY: number, room: ReturnType<typeof usePlanStore.getState>['room']) {
@@ -444,11 +422,10 @@ export const DoorsWindowsSection = memo(function DoorsWindowsSection() {
 
           <div className="flex items-center gap-2 mb-2">
             <label className="text-xs text-text-muted" style={{ fontFamily: 'var(--font-body)' }}>En</label>
-            <input
-              type="number"
+            <LiveDimInput
               min={5} max={200}
               value={selectedColumn.widthCm}
-              onChange={(e) => { const v = Number(e.target.value); if (v >= 5) updateColumn(selectedColumn.id, { widthCm: v, position: adjustColPos(selectedColumn, v, selectedColumn.depthCm) }); }}
+              onLiveChange={(v) => updateColumn(selectedColumn.id, { widthCm: v, position: adjustColPos(selectedColumn, v, selectedColumn.depthCm) })}
               className="w-20 px-2 py-1 text-sm rounded border border-border bg-[var(--color-background)] text-[var(--color-text)] outline-none focus:border-primary"
               style={{ fontFamily: 'var(--font-mono)' }}
             />
@@ -457,11 +434,10 @@ export const DoorsWindowsSection = memo(function DoorsWindowsSection() {
 
           <div className="flex items-center gap-2 mb-2">
             <label className="text-xs text-text-muted" style={{ fontFamily: 'var(--font-body)' }}>Boy</label>
-            <input
-              type="number"
+            <LiveDimInput
               min={5} max={200}
               value={selectedColumn.depthCm}
-              onChange={(e) => { const v = Number(e.target.value); if (v >= 5) updateColumn(selectedColumn.id, { depthCm: v, position: adjustColPos(selectedColumn, selectedColumn.widthCm, v) }); }}
+              onLiveChange={(v) => updateColumn(selectedColumn.id, { depthCm: v, position: adjustColPos(selectedColumn, selectedColumn.widthCm, v) })}
               className="w-20 px-2 py-1 text-sm rounded border border-border bg-[var(--color-background)] text-[var(--color-text)] outline-none focus:border-primary"
               style={{ fontFamily: 'var(--font-mono)' }}
             />
@@ -470,11 +446,10 @@ export const DoorsWindowsSection = memo(function DoorsWindowsSection() {
 
           <div className="flex items-center gap-2">
             <label className="text-xs text-text-muted" style={{ fontFamily: 'var(--font-body)' }}>Açı</label>
-            <input
-              type="number"
+            <LiveDimInput
               min={0} max={359}
               value={selectedColumn.rotation}
-              onChange={(e) => { const v = Number(e.target.value); updateColumn(selectedColumn.id, { rotation: ((v % 360) + 360) % 360 }); }}
+              onLiveChange={(v) => updateColumn(selectedColumn.id, { rotation: ((v % 360) + 360) % 360 })}
               className="w-20 px-2 py-1 text-sm rounded border border-border bg-[var(--color-background)] text-[var(--color-text)] outline-none focus:border-primary"
               style={{ fontFamily: 'var(--font-mono)' }}
             />

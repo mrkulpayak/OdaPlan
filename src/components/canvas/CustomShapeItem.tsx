@@ -7,6 +7,7 @@ import { computeSnap, customShapesAsFakeInstances } from '../../hooks/useSnap';
 import { useCatalogStore } from '../../store/catalogStore';
 import { SelectionHandles } from './SelectionHandles';
 import { RadialRotateMenu } from './RadialRotateMenu';
+import { LiveDimInput } from '../ui/LiveDimInput';
 import {
   shapePolygonCm,
   polygonToSVGPoints,
@@ -103,6 +104,14 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
   const pendingDragRef = useRef<{ x: number; y: number } | null>(null);
   const isDraggingRef  = useRef(false);
   const dragOffsetRef  = useRef({ x: bbox.w / 2, y: bbox.h / 2 });
+  // Mirrors the "live" drag state — updated synchronously on every pointer event,
+  // just like useDrag.ts uses dragState.current for regular furniture.
+  // This avoids stale-closure bugs where instance.rotation / instance.snappedTo
+  // seen inside useCallback lags behind the store by one render cycle.
+  const dragLiveRef = useRef<{ rotation: number; snappedTo: typeof instance.snappedTo }>({
+    rotation: instance.rotation,
+    snappedTo: instance.snappedTo,
+  });
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
@@ -111,6 +120,8 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
     e.currentTarget.setPointerCapture(e.pointerId);
     pendingDragRef.current = { x: e.clientX, y: e.clientY };
     isDraggingRef.current  = false;
+    // Seed the live drag ref so the first pointer-move frame has correct values.
+    dragLiveRef.current = { rotation: instance.rotation, snappedTo: instance.snappedTo };
 
     const canvasSvg = document.querySelector('#canvas svg') as SVGSVGElement | null;
     if (canvasSvg) {
@@ -154,14 +165,30 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
     const csSnap = customShapesAsFakeInstances(state.customShapeInstances, instance.id);
     const allInstances = [...state.furnitureInstances, ...csSnap.instances];
     const allItemMap = new Map([...itemMap, ...csSnap.itemMap]);
-    const snap = computeSnap(pos, fakeItem, snapRoom, allInstances, allItemMap, instance.rotation);
+    // Read rotation and snappedTo from the ref — never from the closure.
+    // IMPORTANT: we pass dragLiveRef.current.rotation as the input rotation but
+    // do NOT update it from snap.rotation after snap fires.
+    // This mirrors exactly what useDrag.ts does for regular furniture:
+    // dragState.current.rotation is set once at drag-start and never changed.
+    // If the input rotation changed each frame based on snap output, the
+    // "closest side" would shift every frame → oscillation feedback loop.
+    const { rotation: liveRotation, snappedTo: liveSnappedTo } = dragLiveRef.current;
+    const snap = computeSnap(
+      pos, fakeItem, snapRoom, allInstances, allItemMap,
+      liveRotation,
+      liveSnappedTo?.side,   // lockedSide — prevents wall-snap oscillation
+    );
+
+    // Only update snappedTo in the ref (for lockedSide on next frame).
+    // rotation stays fixed at the value set on pointerDown — same as useDrag.
+    dragLiveRef.current.snappedTo = snap.snappedTo;
 
     updateCustomShapeInstance(instance.id, {
-      position: snap.position,
-      rotation: snap.rotation,
+      position:  snap.position,
+      rotation:  snap.rotation,
       snappedTo: snap.snappedTo,
     });
-  }, [instance.id, instance.dims, instance.rotation, updateCustomShapeInstance]);
+  }, [instance.id, instance.dims, updateCustomShapeInstance]);
 
   const handlePointerUp = useCallback(() => {
     pendingDragRef.current = null;
@@ -188,6 +215,7 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
     e.stopPropagation();
     pendingDragRef.current = { x: e.clientX, y: e.clientY };
     isDraggingRef.current  = true;
+    dragLiveRef.current = { rotation: instance.rotation, snappedTo: instance.snappedTo };
     e.currentTarget.setPointerCapture(e.pointerId);
 
     const canvasSvg = document.querySelector('#canvas svg') as SVGSVGElement | null;
@@ -201,7 +229,7 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
         y: cmY - instance.position.y,
       };
     }
-  }, [instance.position]);
+  }, [instance.position, instance.rotation, instance.snappedTo]);
 
   // ── Radial menu handlers (memoized — stable refs prevent useEffect re-runs) ──
   const handleOpenRadial = useCallback(() => {
@@ -235,16 +263,13 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
     setIsEditing(false);
   }, [instance.id, editDims, updateCustomShapeInstance]);
 
-  const handleDimChange = useCallback((key: string, raw: string) => {
-    const v = parseFloat(raw);
-    if (!Number.isNaN(v) && v >= 5) {
-      setEditDims((prev) => {
-        const next = { ...prev, [key]: v };
-        // Live preview: update the shape in real-time
-        updateCustomShapeInstance(instance.id, { dims: next });
-        return next;
-      });
-    }
+  const handleDimChange = useCallback((key: string, v: number) => {
+    setEditDims((prev) => {
+      const next = { ...prev, [key]: v };
+      // Live preview: update the shape in real-time
+      updateCustomShapeInstance(instance.id, { dims: next });
+      return next;
+    });
   }, [instance.id, updateCustomShapeInstance]);
 
   // ── Panel drag handlers (header drag-to-move) ─────────────────
@@ -432,11 +457,10 @@ export const CustomShapeItem = memo(function CustomShapeItem({ instance, zoom }:
               <span style={{ fontSize: '10px', color: '#888', flex: 1, fontFamily: 'var(--font-body)' }}>
                 {DIM_LABELS[instance.shapeType][key]}
               </span>
-              <input
-                type="number"
+              <LiveDimInput
                 min={5}
                 value={editDims[key] ?? 80}
-                onChange={(e) => handleDimChange(key, e.target.value)}
+                onLiveChange={(v) => handleDimChange(key, v)}
                 style={{
                   width: '60px',
                   fontFamily: 'var(--font-mono)',

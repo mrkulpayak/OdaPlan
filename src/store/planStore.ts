@@ -690,20 +690,53 @@ export const usePlanStore = create<PlanState & PlanActions>()(
           return p;
         });
 
-        // Move wall-snapped furniture and columns by the normal delta
-        // (wall angle unchanged, so along-wall positions remain valid)
+        // Move items that are flush against this wall by the normal delta.
+        // Geometric test (not just snappedTo bookkeeping) so corner items
+        // flush to TWO walls follow whichever wall is dragged — moving
+        // perpendicular to the other wall keeps them in the corner.
+        const isFlushToDraggedWall = (
+          pos: Point, w: number, d: number, rotDeg: number,
+        ): boolean => {
+          const θ = (rotDeg * Math.PI) / 180;
+          const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
+          const cx = pos.x + w / 2, cy = pos.y + d / 2;
+          const TOL = 2; // cm
+          const faces = [
+            [0, -d / 2], [0, d / 2], [-w / 2, 0], [w / 2, 0],
+          ];
+          for (const [lx, ly] of faces) {
+            const fx = cx + lx * cosθ - ly * sinθ;
+            const fy = cy + lx * sinθ + ly * cosθ;
+            const dx = fx - P1.x, dy = fy - P1.y;
+            const perp = Math.abs(-dx * uy + dy * ux);
+            const along = dx * ux + dy * uy;
+            if (perp < TOL && along >= -TOL && along <= wLen + TOL) return true;
+          }
+          return false;
+        };
+
+        const { products } = useCatalogStore.getState();
         const updatedInstances = state.furnitureInstances.map((fi) => {
-          if (fi.snappedTo?.wallId !== wallId) return fi;
+          const item = products.find((p) => p.id === fi.catalogItemId);
+          const follows = fi.snappedTo?.wallId === wallId ||
+            (item && isFlushToDraggedWall(fi.position, item.widthCm, item.depthCm, fi.rotation));
+          if (!follows) return fi;
           return { ...fi, position: { x: fi.position.x + delta.x, y: fi.position.y + delta.y } };
         });
 
         const updatedColumns = (state.room.columns ?? []).map((col) => {
-          if (!col.snappedToWall || col.snappedToWall.wallId !== wallId) return col;
+          const follows = col.snappedToWall?.wallId === wallId ||
+            isFlushToDraggedWall(col.position, col.widthCm, col.depthCm, col.rotation);
+          if (!follows) return col;
           return { ...col, position: { x: col.position.x + delta.x, y: col.position.y + delta.y } };
         });
 
         const updatedCustomShapes = state.customShapeInstances.map((cs) => {
-          if (cs.snappedTo?.wallId !== wallId) return cs;
+          // Bounding box: dims.A = width, dims.B = depth for all shape types
+          const bw = cs.dims.A ?? 80, bd = cs.dims.B ?? 80;
+          const follows = cs.snappedTo?.wallId === wallId ||
+            isFlushToDraggedWall(cs.position, bw, bd, cs.rotation);
+          if (!follows) return cs;
           return { ...cs, position: { x: cs.position.x + delta.x, y: cs.position.y + delta.y } };
         });
 

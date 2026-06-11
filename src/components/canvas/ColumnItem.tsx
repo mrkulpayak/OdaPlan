@@ -1,12 +1,101 @@
-import { memo, useState, useRef, useCallback } from 'react';
+import { memo, useState, useRef, useCallback, useEffect } from 'react';
 import { cmToPx, pxToCm } from '../../lib/geometry';
+import { closestPointOnSegment } from '../../lib/geometry';
 import { usePlanStore } from '../../store/planStore';
 import { useUiStore } from '../../store/uiStore';
-import { computeSnap, collectWallItemEdges, snapToWallItemEdges } from '../../hooks/useSnap';
+import { computeSnap, collectWallItemEdges, snapToWallItemEdges, rotatedSideMidpointsExport, pushOffWalls } from '../../hooks/useSnap';
 import { SNAP_DISTANCE_CM } from '../../lib/constants';
-import type { Column, Room as RoomType, FurnitureCatalogItem } from '../../types';
+import type { Column, Room as RoomType, FurnitureCatalogItem, FurnitureFrontSide } from '../../types';
 import { WallSegmentLabels } from './WallSegmentLabels';
+import { SelectionHandles } from './SelectionHandles';
+import { RadialRotateMenu } from './RadialRotateMenu';
 import type { Point } from '../../types';
+
+// ── Detect ALL faces that are flush against any wall ─────────────────────────
+export function detectAllFlushSides(
+  pos: Point, wc: number, dc: number, rotation: number, room: RoomType,
+  tolCm = 2,
+): Array<'top' | 'right' | 'bottom' | 'left'> {
+  const θ = (rotation * Math.PI) / 180;
+  const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
+  const cx = pos.x + wc / 2, cy = pos.y + dc / 2;
+
+  const faces = [
+    { side: 'top'    as const, lx: 0,       ly: -dc / 2 },
+    { side: 'bottom' as const, lx: 0,       ly:  dc / 2 },
+    { side: 'left'   as const, lx: -wc / 2, ly: 0       },
+    { side: 'right'  as const, lx:  wc / 2, ly: 0       },
+  ];
+
+  const result: Array<'top' | 'right' | 'bottom' | 'left'> = [];
+  for (const { side, lx, ly } of faces) {
+    const fx = cx + lx * cosθ - ly * sinθ;
+    const fy = cy + lx * sinθ + ly * cosθ;
+    for (const wall of room.walls) {
+      const A = room.points[wall.startPointIndex];
+      const B = room.points[wall.endPointIndex];
+      const wLen = Math.hypot(B.x - A.x, B.y - A.y);
+      if (wLen < 1) continue;
+      const wux = (B.x - A.x) / wLen, wuy = (B.y - A.y) / wLen;
+      const dx = fx - A.x, dy = fy - A.y;
+      const perp = Math.abs(-dx * wuy + dy * wux);
+      const along = dx * wux + dy * wuy;
+      if (perp < tolCm && along >= -tolCm && along <= wLen + tolCm) {
+        result.push(side);
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Recompute the column top-left position after a dimension change so that
+ * all currently-flush wall faces remain flush.
+ *
+ * Key insight: X-axis anchor and Y-axis anchor are INDEPENDENT.
+ *   • X position → determined by which of {left, right} faces is flush
+ *   • Y position → determined by which of {top, bottom} faces is flush
+ *
+ * This correctly handles all four corners, single-wall snaps, and the case
+ * where the snapped side is perpendicular to the dimension being changed
+ * (e.g. primary='top' but 'right' is also flush — both must stay fixed).
+ *
+ * Works correctly for rotation=0 (common case).
+ * For rotated columns the same face-midpoint logic is used per axis.
+ */
+export function adjustColPosForCorner(
+  col: Column, newWc: number, newDc: number, room: RoomType,
+): Point {
+  // Collect all flush sides. Always include snappedToWall.side as a guaranteed anchor.
+  const detected = detectAllFlushSides(col.position, col.widthCm, col.depthCm, col.rotation, room);
+  const allFlush = new Set(detected);
+  if (col.snappedToWall) allFlush.add(col.snappedToWall.side);
+  if (allFlush.size === 0) return col.position;
+
+  const θ = (col.rotation * Math.PI) / 180;
+  const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
+  const cx = col.position.x + col.widthCm / 2;
+  const cy = col.position.y + col.depthCm / 2;
+
+  // Anchor each flush face in LOCAL space, then rotate the combined delta to
+  // world space. Keeping a face fixed means the center shifts by
+  // (oldOffset − newOffset) along that face's local axis — this is rotation-
+  // independent, so it works at any angle (0/90/180/270 and angled walls).
+  // Local X axis ← left/right faces; local Y axis ← top/bottom faces.
+  let dlx = 0;
+  if (allFlush.has('right'))     dlx = (col.widthCm - newWc) / 2;
+  else if (allFlush.has('left')) dlx = (newWc - col.widthCm) / 2;
+
+  let dly = 0;
+  if (allFlush.has('top'))         dly = (newDc - col.depthCm) / 2;
+  else if (allFlush.has('bottom')) dly = (col.depthCm - newDc) / 2;
+
+  const newCx = cx + dlx * cosθ - dly * sinθ;
+  const newCy = cy + dlx * sinθ + dly * cosθ;
+
+  return { x: newCx - newWc / 2, y: newCy - newDc / 2 };
+}
 
 // ── When corner snap fires (no snappedTo), detect if a face is flush with a wall ──
 function detectWallFlush(
@@ -50,35 +139,6 @@ function detectWallFlush(
   return best;
 }
 
-// ── Recompute position so snapped face stays on wall after dimension change ───
-function adjustPosForDimChange(
-  col: Column, newWc: number, newDc: number
-): Point {
-  if (!col.snappedToWall) return col.position;
-  const { side } = col.snappedToWall;
-  const θ = (col.rotation * Math.PI) / 180;
-  const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
-  const cx = col.position.x + col.widthCm / 2;
-  const cy = col.position.y + col.depthCm / 2;
-
-  // Current face midpoint (world coords)
-  const [flx, fly] = side === 'top' ? [0, -col.depthCm / 2]
-    : side === 'bottom' ? [0, col.depthCm / 2]
-    : side === 'left' ? [-col.widthCm / 2, 0]
-    : [col.widthCm / 2, 0];
-  const faceMidX = cx + flx * cosθ - fly * sinθ;
-  const faceMidY = cy + flx * sinθ + fly * cosθ;
-
-  // New face offset with updated dimensions
-  const [nflx, nfly] = side === 'top' ? [0, -newDc / 2]
-    : side === 'bottom' ? [0, newDc / 2]
-    : side === 'left' ? [-newWc / 2, 0]
-    : [newWc / 2, 0];
-  const newCx = faceMidX - (nflx * cosθ - nfly * sinθ);
-  const newCy = faceMidY - (nflx * sinθ + nfly * cosθ);
-
-  return { x: newCx - newWc / 2, y: newCy - newDc / 2 };
-}
 
 // ── Ray–segment intersection for free-floating labels ────────────────────────
 function castRay(
@@ -189,8 +249,53 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
   const selectedItemId = useUiStore((s) => s.selectedItemId);
   const setSelectedItemId = useUiStore((s) => s.setSelectedItemId);
   const updateColumn = usePlanStore((s) => s.updateColumn);
-  const wallsLocked = usePlanStore((s) => s.canvas.wallsLocked);
+  const removeColumn = usePlanStore((s) => s.removeColumn);
+  const addColumn    = usePlanStore((s) => s.addColumn);
+  const wallsLocked  = usePlanStore((s) => s.canvas.wallsLocked);
   const isSelected = selectedItemId === column.id;
+
+  // ── Radial rotate menu (mirrors FurnitureItem) ────────────────────────────
+  const [radialActive, setRadialActive] = useState(false);
+  const [radialAngle, setRadialAngle] = useState(column.rotation);
+  const originalAngleRef = useRef(column.rotation);
+
+  const handleOpenRadial = useCallback(() => {
+    originalAngleRef.current = usePlanStore.getState().room?.columns?.find(c => c.id === column.id)?.rotation ?? column.rotation;
+    setRadialAngle(originalAngleRef.current);
+    setRadialActive(true);
+  }, [column.id, column.rotation]);
+
+  const handleRadialAngleChange = useCallback((angle: number) => {
+    setRadialAngle(angle);
+    updateColumn(column.id, { rotation: angle, snappedToWall: undefined });
+  }, [updateColumn, column.id]);
+
+  const handleRadialConfirm = useCallback(() => {
+    setRadialActive(false);
+  }, []);
+
+  const handleRadialCancel = useCallback(() => {
+    updateColumn(column.id, { rotation: originalAngleRef.current, snappedToWall: undefined });
+    setRadialActive(false);
+  }, [updateColumn, column.id]);
+
+  useEffect(() => {
+    if (!isSelected) setRadialActive(false);
+  }, [isSelected]);
+
+  // ── Keyboard delete ───────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isSelected) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if ((e.target as HTMLElement).tagName === 'INPUT') return;
+        removeColumn(column.id);
+        setSelectedItemId(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isSelected, column.id, removeColumn, setSelectedItemId]);
 
   const { widthCm: wc, depthCm: dc, position: pos, rotation } = column;
   const θ = (rotation * Math.PI) / 180;
@@ -222,8 +327,11 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
   ];
 
   // ── Drag with snap ──────────────────────────────────────────────────────────
-  // Drag state lives in a ref so it survives React re-renders without stale closures.
-  // All pointer events go through React handlers on the <g> element; no window listeners needed.
+  // dragRef: raw pointer-down state (positions, canvas element).
+  // dragLiveRef: snap state that must stay synchronous between React renders.
+  //   rotation is FIXED at drag-start (never updated during drag) to prevent
+  //   the oscillation / auto-rotate caused by snap changing rotation each frame.
+  //   snappedTo tracks the currently locked wall side (hysteresis).
   const dragRef = useRef<{
     startCmX: number;
     startCmY: number;
@@ -232,8 +340,16 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
     canvasSvg: SVGSVGElement;
   } | null>(null);
 
+  const dragLiveRef = useRef<{
+    rotation: number;
+    snappedTo: Column['snappedToWall'];
+  }>({ rotation: column.rotation, snappedTo: column.snappedToWall });
+
   const colId = column.id;
 
+  // handlePointerDown uses window-level listeners so SelectionHandles' drag
+  // rect (onStartMoveDrag) and the column body both work correctly without
+  // needing to rely on React event bubbling / pointer capture routing.
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
     usePlanStore.getState().saveSnapshot();
@@ -248,101 +364,108 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
     const startCmY = pxToCm((e.clientY - r.top - canvas.panY) / canvas.zoom);
     const liveState = usePlanStore.getState();
     const liveCol = (liveState.room?.columns ?? []).find(c => c.id === colId);
+
+    dragLiveRef.current = {
+      rotation: liveCol?.rotation ?? column.rotation,
+      snappedTo: liveCol?.snappedToWall ?? column.snappedToWall,
+    };
+
     dragRef.current = {
       startCmX,
       startCmY,
-      startPosX: liveCol?.position.x ?? liveState.room ? 0 : 0,
+      startPosX: liveCol?.position.x ?? 0,
       startPosY: liveCol?.position.y ?? 0,
       canvasSvg,
     };
-    // Initialise with live position
-    if (liveCol) {
-      dragRef.current.startPosX = liveCol.position.x;
-      dragRef.current.startPosY = liveCol.position.y;
-    }
-  }, [colId, setSelectedItemId]);
 
-  const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    if (!dragRef.current) return;
-    e.stopPropagation();          // prevent canvas pan from activating
-    e.preventDefault();
+    const onMove = (me: PointerEvent) => {
+      if (!dragRef.current) return;
+      const { startCmX: scx, startCmY: scy, startPosX: spx, startPosY: spy, canvasSvg: svg } = dragRef.current;
+      const { canvas: cv, room: currentRoom } = usePlanStore.getState();
+      const rr = svg.getBoundingClientRect();
+      const cmX = pxToCm((me.clientX - rr.left - cv.panX) / cv.zoom);
+      const cmY = pxToCm((me.clientY - rr.top - cv.panY) / cv.zoom);
+      const rawPos = { x: spx + cmX - scx, y: spy + cmY - scy };
 
-    const { startCmX, startCmY, startPosX, startPosY, canvasSvg } = dragRef.current;
-    const { canvas: cv, room: currentRoom } = usePlanStore.getState();
-    const rr = canvasSvg.getBoundingClientRect();
-    const cmX = pxToCm((e.clientX - rr.left - cv.panX) / cv.zoom);
-    const cmY = pxToCm((e.clientY - rr.top - cv.panY) / cv.zoom);
-    const rawPos = { x: startPosX + cmX - startCmX, y: startPosY + cmY - startCmY };
+      if (!currentRoom) { updateColumn(colId, { position: rawPos, snappedToWall: undefined }); return; }
 
-    if (!currentRoom) { updateColumn(colId, { position: rawPos, snappedToWall: undefined }); return; }
+      const liveCol2 = (currentRoom.columns ?? []).find(c => c.id === colId);
+      const liveWidthCm = liveCol2?.widthCm ?? column.widthCm;
+      const liveDepthCm = liveCol2?.depthCm ?? column.depthCm;
 
-    // Read live column state so snap uses up-to-date dimensions/rotation
-    const liveCol = (currentRoom.columns ?? []).find(c => c.id === colId);
-    const liveWidthCm  = liveCol?.widthCm  ?? column.widthCm;
-    const liveDepthCm  = liveCol?.depthCm  ?? column.depthCm;
-    const liveRotation = liveCol?.rotation ?? column.rotation;
+      const { rotation: fixedRotation, snappedTo: liveSnappedTo } = dragLiveRef.current;
 
-    // Exclude self from columns so computeSnap doesn't snap to own faces
-    const roomForSnap = {
-      ...currentRoom,
-      columns: (currentRoom.columns ?? []).filter(c => c.id !== colId),
-    };
+      const roomForSnap = {
+        ...currentRoom,
+        columns: (currentRoom.columns ?? []).filter(c => c.id !== colId),
+      };
+      const fakeItem = { widthCm: liveWidthCm, depthCm: liveDepthCm } as FurnitureCatalogItem;
+      const snapRoomForCol = cv.snapEnabled !== false ? roomForSnap : null;
 
-    const fakeItem = { widthCm: liveWidthCm, depthCm: liveDepthCm } as FurnitureCatalogItem;
-    const { canvas: cv2 } = usePlanStore.getState();
-    const snapRoomForCol = cv2.snapEnabled !== false ? roomForSnap : null;
-    let snapResult = computeSnap(rawPos, fakeItem, snapRoomForCol, [], new Map(), liveRotation);
+      const snapResult = computeSnap(
+        rawPos, fakeItem, snapRoomForCol, [], new Map(),
+        fixedRotation,
+        liveSnappedTo?.side as FurnitureFrontSide | undefined,
+      );
 
-    // Along-wall snap: snap column edge to wall endpoints, doors, windows, other columns
-    if (snapResult.snappedTo) {
-      const { wallId, side } = snapResult.snappedTo;
-      const wall = currentRoom.walls.find((w) => w.id === wallId);
-      if (wall) {
-        const wA = currentRoom.points[wall.startPointIndex];
-        const wB = currentRoom.points[wall.endPointIndex];
-        const wLen = Math.hypot(wB.x - wA.x, wB.y - wA.y);
-        if (wLen > 1) {
-          const ux = (wB.x - wA.x) / wLen;
-          const uy = (wB.y - wA.y) / wLen;
-          const cx = snapResult.position.x + liveWidthCm / 2;
-          const cy = snapResult.position.y + liveDepthCm / 2;
-          const tAlong = (cx - wA.x) * ux + (cy - wA.y) * uy;
-          const halfW = (side === 'top' || side === 'bottom') ? liveWidthCm / 2 : liveDepthCm / 2;
-          // Snap to wall endpoints
-          const leftT  = tAlong - halfW;
-          const rightT = tAlong + halfW;
-          let delta = 0;
-          if (Math.abs(leftT) < SNAP_DISTANCE_CM) delta = -leftT;
-          else if (Math.abs(rightT - wLen) < SNAP_DISTANCE_CM) delta = wLen - rightT;
-          // Snap to door/window/column edges on this wall
-          if (delta === 0) {
-            const edges = collectWallItemEdges(wallId, wA.x, wA.y, wB.x, wB.y, colId, currentRoom);
-            delta = snapToWallItemEdges(tAlong, halfW, SNAP_DISTANCE_CM / 2, edges);
-          }
-          if (delta !== 0) {
-            snapResult = {
-              ...snapResult,
-              position: { x: snapResult.position.x + delta * ux, y: snapResult.position.y + delta * uy },
-            };
+      dragLiveRef.current.snappedTo = snapResult.snappedTo
+        ? { wallId: snapResult.snappedTo.wallId, side: snapResult.snappedTo.side as 'top' | 'right' | 'bottom' | 'left' }
+        : undefined;
+
+      let finalPos = snapResult.position;
+      if (snapResult.snappedTo) {
+        const { wallId, side } = snapResult.snappedTo;
+        const wall = currentRoom.walls.find(w => w.id === wallId);
+        if (wall) {
+          const wA = currentRoom.points[wall.startPointIndex];
+          const wB = currentRoom.points[wall.endPointIndex];
+          const wLen = Math.hypot(wB.x - wA.x, wB.y - wA.y);
+          if (wLen > 1) {
+            const ux = (wB.x - wA.x) / wLen, uy = (wB.y - wA.y) / wLen;
+            const mids = rotatedSideMidpointsExport(rawPos, liveWidthCm, liveDepthCm, fixedRotation);
+            const mid  = mids[side as FurnitureFrontSide];
+            const wallPt = closestPointOnSegment(mid, wA, wB);
+            const cx0 = rawPos.x + liveWidthCm / 2, cy0 = rawPos.y + liveDepthCm / 2;
+            const rdx = mid.x - cx0, rdy = mid.y - cy0;
+            finalPos = { x: wallPt.x - rdx - liveWidthCm / 2, y: wallPt.y - rdy - liveDepthCm / 2 };
+
+            const cx1 = finalPos.x + liveWidthCm / 2, cy1 = finalPos.y + liveDepthCm / 2;
+            const tAlong = (cx1 - wA.x) * ux + (cy1 - wA.y) * uy;
+            const halfW  = (side === 'top' || side === 'bottom') ? liveWidthCm / 2 : liveDepthCm / 2;
+            const leftT  = tAlong - halfW, rightT = tAlong + halfW;
+            let delta = 0;
+            if (Math.abs(leftT) < SNAP_DISTANCE_CM) delta = -leftT;
+            else if (Math.abs(rightT - wLen) < SNAP_DISTANCE_CM) delta = wLen - rightT;
+            if (delta === 0) {
+              const edgeList = collectWallItemEdges(wallId, wA.x, wA.y, wB.x, wB.y, colId, currentRoom);
+              delta = snapToWallItemEdges(tAlong, halfW, SNAP_DISTANCE_CM / 2, edgeList);
+            }
+            if (delta !== 0) finalPos = { x: finalPos.x + delta * ux, y: finalPos.y + delta * uy };
           }
         }
       }
-    }
 
-    const rawSnappedTo = snapResult.snappedTo
-      ? { wallId: snapResult.snappedTo.wallId, side: snapResult.snappedTo.side as 'top' | 'right' | 'bottom' | 'left' }
-      : detectWallFlush(snapResult.position, liveWidthCm, liveDepthCm, snapResult.rotation, currentRoom);
+      // The flush recompute above bypasses computeSnap's straddle guard — re-apply
+      // it so a wall-snapped column can't slide across a perpendicular wall.
+      // (Pushing happens along the offending wall's normal, which is parallel to
+      // the snapped wall, so flushness is preserved.)
+      finalPos = pushOffWalls(finalPos, liveWidthCm, liveDepthCm, fixedRotation, currentRoom);
 
-    updateColumn(colId, {
-      position: snapResult.position,
-      rotation: snapResult.rotation,
-      snappedToWall: rawSnappedTo,
-    });
-  }, [colId, column.widthCm, column.depthCm, column.rotation, updateColumn]);
+      const newSnappedTo = dragLiveRef.current.snappedTo
+        ?? detectWallFlush(finalPos, liveWidthCm, liveDepthCm, fixedRotation, currentRoom);
 
-  const handlePointerUp = useCallback((_e: React.PointerEvent) => {
-    dragRef.current = null;
-  }, []);
+      updateColumn(colId, { position: finalPos, snappedToWall: newSnappedTo });
+    };
+
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [colId, column.rotation, column.snappedToWall, column.widthCm, column.depthCm, updateColumn, setSelectedItemId]);
 
   // ── Wall-snapped depth label (into room, shown for selected column only) ────
   const WallDepthLabel = () => {
@@ -379,7 +502,7 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
           updateColumn(column.id, {
             widthCm: newWc,
             depthCm: newDc,
-            position: adjustPosForDimChange(column, newWc, newDc),
+            position: adjustColPosForCorner(column, newWc, newDc, room),
           });
         }}
       />
@@ -390,29 +513,27 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
 
   return (
     <g>
+      {/* hatchId defs — local coordinate system (0,0 origin) */}
       <defs>
         <pattern id={hatchId} patternUnits="userSpaceOnUse" width={6} height={6}
-          patternTransform={`rotate(${-rotation}, ${cxPx}, ${cyPx})`}>
+          patternTransform={`rotate(${-rotation}, ${wPx / 2}, ${dPx / 2})`}>
           <line x1={0} y1={6} x2={6} y2={0} stroke="var(--color-room-outline)" strokeWidth={0.8} strokeOpacity={0.5} />
         </pattern>
       </defs>
 
-      {/* Column body */}
+      {/* Column body — translated to top-left, rotated around local centre (same as FurnitureItem) */}
       <g
-        transform={`rotate(${rotation}, ${cxPx}, ${cyPx})`}
-        style={{ cursor: dragRef.current ? 'grabbing' : 'move' }}
+        transform={`translate(${cxPx - wPx / 2}, ${cyPx - dPx / 2}) rotate(${rotation}, ${wPx / 2}, ${dPx / 2})`}
+        style={{ cursor: isSelected ? 'default' : 'move' }}
         onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
       >
-        <rect x={cxPx - wPx / 2} y={cyPx - dPx / 2} width={wPx} height={dPx} fill="var(--color-background)" />
-        <rect x={cxPx - wPx / 2} y={cyPx - dPx / 2} width={wPx} height={dPx} fill={`url(#${hatchId})`} />
+        <rect x={0} y={0} width={wPx} height={dPx} fill="var(--color-background)" />
+        <rect x={0} y={0} width={wPx} height={dPx} fill={`url(#${hatchId})`} />
         {(() => {
           const sc = isSelected ? 'var(--color-primary)' : 'var(--color-room-outline)';
           const sw = isSelected ? 2 / zoom : 1.5;
-          const x = cxPx - wPx / 2, y = cyPx - dPx / 2;
 
-          // When walls locked, detect ALL faces that are flush against any wall and hide them
+          // When walls locked, hide faces that are flush against any wall
           if (wallsLocked && column.snappedToWall) {
             const θ = (rotation * Math.PI) / 180;
             const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
@@ -441,11 +562,12 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
                 }
               }
             }
+            // Coordinates in local (0,0) space
             const sides = [
-              { key: 'top',    x1: x,       y1: y,       x2: x + wPx, y2: y       },
-              { key: 'right',  x1: x + wPx, y1: y,       x2: x + wPx, y2: y + dPx },
-              { key: 'bottom', x1: x,       y1: y + dPx, x2: x + wPx, y2: y + dPx },
-              { key: 'left',   x1: x,       y1: y,       x2: x,       y2: y + dPx },
+              { key: 'top',    x1: 0,    y1: 0,    x2: wPx, y2: 0    },
+              { key: 'right',  x1: wPx,  y1: 0,    x2: wPx, y2: dPx  },
+              { key: 'bottom', x1: 0,    y1: dPx,  x2: wPx, y2: dPx  },
+              { key: 'left',   x1: 0,    y1: 0,    x2: 0,   y2: dPx  },
             ] as const;
             return (
               <>
@@ -456,22 +578,94 @@ export const ColumnItem = memo(function ColumnItem({ column, room, zoom }: Props
             );
           }
 
-          return <rect x={x} y={y} width={wPx} height={dPx} fill="none" stroke={sc} strokeWidth={sw} />;
+          return <rect x={0} y={0} width={wPx} height={dPx} fill="none" stroke={sc} strokeWidth={sw} />;
         })()}
+
+        {/* SelectionHandles lives inside the rotate group — same as FurnitureItem */}
+        {isSelected && (
+          <SelectionHandles
+            widthCm={wc}
+            depthCm={dc}
+            rotation={rotation}
+            zoom={zoom}
+            radialActive={radialActive}
+            onStartMoveDrag={handlePointerDown}
+            onRotate90={() => {
+              usePlanStore.getState().saveSnapshot();
+              updateColumn(column.id, { rotation: (rotation + 90) % 360, snappedToWall: undefined });
+            }}
+            onDelete={() => {
+              usePlanStore.getState().saveSnapshot();
+              removeColumn(column.id);
+              setSelectedItemId(null);
+            }}
+            onDuplicate={() => {
+              usePlanStore.getState().saveSnapshot();
+              addColumn({
+                ...column,
+                id: crypto.randomUUID(),
+                position: { x: column.position.x + 20, y: column.position.y + 20 },
+                snappedToWall: undefined,
+              });
+            }}
+            onOpenRadial={handleOpenRadial}
+          />
+        )}
       </g>
 
-      {/* Distance labels when selected */}
+      {/* RadialRotateMenu — outside the rotate group, at world-px center */}
+      {isSelected && radialActive && (
+        <RadialRotateMenu
+          cx={cxPx}
+          cy={cyPx}
+          currentAngle={radialAngle}
+          originalAngle={originalAngleRef.current}
+          zoom={zoom}
+          onAngleChange={handleRadialAngleChange}
+          onConfirm={handleRadialConfirm}
+          onCancel={handleRadialCancel}
+        />
+      )}
+
+      {/* Distance labels when selected — one set per flush wall (corner columns touch two) */}
       {isSelected && column.snappedToWall && (() => {
-        const wall = room.walls.find(w => w.id === column.snappedToWall!.wallId);
-        if (!wall) return null;
-        return (
-          <WallSegmentLabels
-            wallId={column.snappedToWall.wallId}
-            wallStart={room.points[wall.startPointIndex]}
-            wallEnd={room.points[wall.endPointIndex]}
-            zoom={zoom}
-          />
-        );
+        // Collect every wall any column face is flush against, plus the snapped wall.
+        const flushWallIds = new Set<string>([column.snappedToWall!.wallId]);
+        const tol = 2;
+        const faceOffsets = [
+          { lx: 0,       ly: -dc / 2 },
+          { lx: 0,       ly:  dc / 2 },
+          { lx: -wc / 2, ly: 0       },
+          { lx:  wc / 2, ly: 0       },
+        ];
+        for (const { lx, ly } of faceOffsets) {
+          const fx = cxCm + lx * cosθ - ly * sinθ;
+          const fy = cyCm + lx * sinθ + ly * cosθ;
+          for (const wall of room.walls) {
+            const A = room.points[wall.startPointIndex];
+            const B = room.points[wall.endPointIndex];
+            const wLen = Math.hypot(B.x - A.x, B.y - A.y);
+            if (wLen < 1) continue;
+            const wux = (B.x - A.x) / wLen, wuy = (B.y - A.y) / wLen;
+            const dx = fx - A.x, dy = fy - A.y;
+            const perp = Math.abs(-dx * wuy + dy * wux);
+            const along = dx * wux + dy * wuy;
+            if (perp < tol && along >= -tol && along <= wLen + tol) flushWallIds.add(wall.id);
+          }
+        }
+        return [...flushWallIds].map(wid => {
+          const wall = room.walls.find(w => w.id === wid);
+          if (!wall) return null;
+          return (
+            <WallSegmentLabels
+              key={`wsl-${wid}`}
+              wallId={wid}
+              wallStart={room.points[wall.startPointIndex]}
+              wallEnd={room.points[wall.endPointIndex]}
+              zoom={zoom}
+            />
+          );
+        });
       })()}
       {isSelected && column.snappedToWall && <WallDepthLabel />}
       {isSelected && !column.snappedToWall && (
